@@ -19,6 +19,22 @@ users can drive DSH from Feishu chat without exposing any port.
 - `transport: "mock"` runs a local HTTP stub (POST `/incoming`, GET
   `/outgoing`) for offline end-to-end tests.
 
+## Attachments (v2.0)
+
+Image / file / video / audio messages are downloaded through the
+message-resource API (`GET /open-apis/im/v1/messages/{message_id}/resources/{file_key}`,
+requires the `im:resource` permission) and:
+
+- saved under the uploads directory (default `<workspace>/.lark-uploads`) with
+  sanitized names; the absolute path is included in the user turn so the agent
+  can process it with its tools (read_image, bash, ffmpeg/ffprobe, ...);
+- images are additionally committed through the attachment service and attached
+  as `ImageBlock`s when the current model declares `image` input
+  (`imageMode: "attach"`, the default) — the same capability gate the
+  `read_image` tool enforces; a text-only model falls back to save-only;
+- `post` (rich text) messages are reduced to plain text; stickers and merged
+  forwards are refused (the Feishu resource API itself does not serve them).
+
 ## Install
 
 Installed into a DSH profile via `dsh plugin`; see the repository README for
@@ -34,6 +50,8 @@ configuration steps.
     appSecret: !!js process.env.LARK_APP_SECRET
     replyToMentionOnly: true
     workspace: !!js process.env.LARK_WORKSPACE  # agent cwd (default: launch dir)
+    uploadsDir: /path/to/uploads               # default <workspace>/.lark-uploads
+    imageMode: attach                          # attach | file
 ```
 
 | Field | Default | Meaning |
@@ -42,6 +60,9 @@ configuration steps.
 | `botOpenId` | auto-fetched | the bot's own open_id (mention filtering) |
 | `replyToMentionOnly` | `true` | group chats respond only when @-mentioned |
 | `workspace` | launch dir | agent working directory |
+| `uploadsDir` | `<workspace>/.lark-uploads` | where downloaded attachments are saved |
+| `imageMode` | `"attach"` | `"attach"`: attach images to image-capable models (and save); `"file"`: save only |
+| `maxUploadBytes` | `104857600` | per-attachment size cap (Feishu limit is 100MB) |
 | `maxReplyChars` | `20000` | truncation bound for replies |
 | `stateFile` | `$DSH_HOME/lark-bridge-state.json` | chat→session mapping persistence |
 | `transport` | `"lark"` | `"lark"` (SDK long connection) or `"mock"` (local stub) |
@@ -50,5 +71,5 @@ configuration steps.
 
 ## Commands
 
-`/new` (fresh session), `/status` (session/model/queue/cwd), `/whoami`
+`/new` (fresh session), `/status` (session/model/queue/cwd/uploads), `/whoami`
 (open_id / chat_id), `/help`.

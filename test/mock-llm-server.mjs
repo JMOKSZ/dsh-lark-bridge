@@ -38,7 +38,10 @@ const server = http.createServer((req, res) => {
       }
       const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
       const lastUser = [...messages].reverse().find((m) => m.role === "user");
-      const userText = lastUser ? String(lastUser.content ?? "") : "(no user message)";
+      const rawContent = lastUser ? lastUser.content : "";
+      const userText = Array.isArray(rawContent)
+        ? rawContent.filter((b) => b && b.type === "text").map((b) => String(b.text ?? "")).join(" ")
+        : String(rawContent ?? "(no user message)");
       const text = `MOCK-REPLY: ${userText}`;
       const model = String(parsed.model ?? "mock-model");
       const id = `mock-chat-${Math.floor(Math.random() * 1e9)}`;

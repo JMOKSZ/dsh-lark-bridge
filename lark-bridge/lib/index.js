@@ -7,6 +7,14 @@
 // the original message. A small command surface (/new, /status, /help,
 // /whoami) manages the per-chat sessions.
 //
+// v2.0 — attachments: image / file / video / audio messages are downloaded
+// through the message-resource API, saved under the uploads directory, and
+// included in the user turn: images are additionally attached as image
+// blocks when the current model declares image input (the same capability
+// gate the read_image tool enforces); other resources reach the agent as
+// absolute paths it can process with its tools. Post (rich text) messages are
+// reduced to their plain text.
+//
 // The plugin is transport-shaped: `transport: "lark"` uses the official
 // @larksuiteoapi/node-sdk WSClient; `transport: "mock"` runs a local HTTP
 // stub (POST /incoming, GET /outgoing) so the bridge can be exercised end to
@@ -39,7 +47,11 @@ const Config = z.object({
   maxReplyChars: z.number().default(20000),
   stateFile: z.string().default(""),
   includeErrorDetails: z.boolean().default(true),
-  ackEnabled: z.boolean().default(true)
+  ackEnabled: z.boolean().default(true),
+  // v2.0 attachment options.
+  uploadsDir: z.string().default(""),
+  imageMode: z.union([z.const("attach"), z.const("file")]).default("attach"),
+  maxUploadBytes: z.number().default(100 * 1024 * 1024)
 });
 
 const HELP_TEXT = [
@@ -50,12 +62,18 @@ const HELP_TEXT = [
   "  · 运行测试并把结果告诉我",
   "  · 帮我写一份周报草稿",
   "",
+  "也可以发送图片、文件、视频/音频，我会下载并处理：",
+  "  · 图片：附加给支持视觉的模型解读，并保存到上传目录",
+  "  · 文件/视频/音频：保存到上传目录，由 agent 用工具分析",
+  "",
   "命令：",
   "  /new       开启新会话（清空本会话的上下文）",
   "  /status    查看当前会话、模型与工作目录",
   "  /whoami    查看我的 open_id / chat_id",
   "  /help      显示本帮助"
 ].join("\n");
+
+const UPLOAD_SUBDIR = ".lark-uploads";
 
 function makeLogger(ctx) {
   // Mirror every message to stdout/stderr as well as the cordis logger, so a
@@ -79,6 +97,10 @@ function makeLogger(ctx) {
     warn: (...args) => out("warn", args),
     error: (...args) => out("error", args)
   };
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** Join the text blocks of an assistant message content. */
@@ -113,12 +135,7 @@ function summarize(events, firstSeq) {
 /** Extract plain text from a Feishu text-message payload and drop mention markup. */
 function textOfMessage(message) {
   if (message.message_type !== "text") return null;
-  let content;
-  try {
-    content = JSON.parse(message.content);
-  } catch {
-    content = null;
-  }
+  const content = parseMessageContent(message.content);
   const raw = typeof content?.text === "string" ? content.text : String(message.content ?? "");
   return raw
     .replace(/<at\s+[^>]*>[\s\S]*?<\/at>/g, " ")
@@ -127,10 +144,119 @@ function textOfMessage(message) {
     .trim();
 }
 
+/** Parse a Feishu message content JSON defensively. */
+function parseMessageContent(content) {
+  try {
+    const parsed = JSON.parse(content ?? "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Reduce a `post` (rich text) message to its plain text. */
+function textOfPost(content) {
+  const parsed = parseMessageContent(content);
+  const parts = [];
+  for (const row of Array.isArray(parsed.content) ? parsed.content : []) {
+    for (const node of Array.isArray(row) ? row : []) {
+      if (node?.tag === "text" && typeof node.text === "string") parts.push(node.text);
+      else if (node?.tag === "a" && typeof node.text === "string") parts.push(`${node.text}${typeof node.href === "string" ? ` (${node.href})` : ""}`);
+    }
+  }
+  const title = typeof parsed.title === "string" ? parsed.title : "";
+  return [title, parts.join("")].filter(Boolean).join("\n").trim();
+}
+
+/** Map a message type + content to the message-resource download `type`. */
+function resourceTypeOf(messageType, content) {
+  switch (messageType) {
+    case "image":
+      return "image";
+    case "file":
+      return "file";
+    case "media": {
+      const name = String(content.file_name ?? "").toLowerCase();
+      if (/\.(mp3|wav|aac|amr|flac|ogg|m4a|opus)$/.test(name)) return "audio";
+      return "video";
+    }
+    default:
+      return null;
+  }
+}
+
+function labelOfKind(kind) {
+  switch (kind) {
+    case "image":
+      return "图片";
+    case "file":
+      return "文件";
+    case "media":
+      return "媒体文件";
+    default:
+      return kind;
+  }
+}
+
+/** Detect one of the four attachment-supported image media types by magic bytes. */
+function detectImageMediaType(bytes, name) {
+  const b = bytes;
+  if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "image/png";
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
+  if (b.length >= 12 && b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return "image/webp";
+  if (b.length >= 3 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return "image/gif";
+  const lower = String(name ?? "").toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".gif")) return "image/gif";
+  return null;
+}
+
+function extOf(name, mediaType) {
+  const match = String(name ?? "").match(/(\.[A-Za-z0-9]{1,10})$/);
+  if (match) return match[1].toLowerCase();
+  switch (mediaType) {
+    case "image/png":
+      return ".png";
+    case "image/jpeg":
+      return ".jpg";
+    case "image/webp":
+      return ".webp";
+    case "image/gif":
+      return ".gif";
+    default:
+      return "";
+  }
+}
+
+/** Sanitize an uploaded file name: no path separators, no control chars. */
+function safeFilename(name, ext) {
+  const base = String(name ?? "")
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_")
+    .replace(/^[.\s]+/, "")
+    .trim() || `upload_${randomUUID().slice(0, 8)}`;
+  const cleaned = base.length > 120 ? base.slice(0, 120) : base;
+  return ext && !cleaned.toLowerCase().endsWith(ext) ? `${cleaned}${ext}` : cleaned;
+}
+
+function formatBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
 /** Truncate an over-long reply and say so. */
 function truncate(text, max) {
   if (max <= 0 || text.length <= max) return text;
   return `${text.slice(0, max)}\n\n…（内容过长，已截断到 ${max} 字符）`;
+}
+
+async function streamToBuffer(stream) {
+  const chunks = [];
+  for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  return Buffer.concat(chunks);
 }
 
 /** Real transport: the official SDK's long-connection client plus IM APIs. */
@@ -178,9 +304,40 @@ class LarkTransport {
       const response = await this.client.request({ method: "GET", url: "/open-apis/bot/v3/info" });
       return response?.bot?.open_id;
     } catch (error) {
-      this.logger.warn(`[lark-bridge] could not fetch the bot open_id (${error instanceof Error ? error.message : String(error)}); group mention filtering may be unavailable`);
+      this.logger.warn(`[lark-bridge] could not fetch the bot open_id (${errorMessage(error)}); group mention filtering may be unavailable`);
       return undefined;
     }
+  }
+
+  /**
+   * Download a user-sent resource (image/file/video/audio) through the
+   * message-resource API. Returns `{ bytes, name?, mediaType? }` or null when
+   * the message carries no downloadable key.
+   */
+  async downloadResource(message) {
+    const content = parseMessageContent(message.content);
+    const type = resourceTypeOf(message.message_type, content);
+    if (type === null) return null;
+    const fileKey = content.image_key ?? content.file_key;
+    if (!fileKey) return null;
+    const candidates = type === "video" || type === "audio"
+      ? [type, type === "video" ? "audio" : "video"]
+      : [type];
+    let lastError;
+    for (const candidate of candidates) {
+      try {
+        const result = await this.client.im.messageResource.get({
+          params: { type: candidate },
+          path: { message_id: message.message_id, file_key: fileKey }
+        });
+        const bytes = await streamToBuffer(result.getReadableStream());
+        const mediaType = result.headers?.["content-type"];
+        return { bytes, name: content.file_name, mediaType };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError ?? new Error("message carries no downloadable resource");
   }
 
   async reply(messageId, text) {
@@ -252,6 +409,18 @@ class MockTransport {
     this.logger.info(`[lark-bridge] mock transport listening on http://127.0.0.1:${this.port}`);
   }
 
+  /** Serve test resources from `message.mockResource` (base64 / filePath / text). */
+  async downloadResource(message) {
+    const mock = message.mockResource;
+    if (!mock) return null;
+    let bytes;
+    if (typeof mock.base64 === "string") bytes = Buffer.from(mock.base64, "base64");
+    else if (typeof mock.filePath === "string") bytes = readFileSync(mock.filePath);
+    else if (typeof mock.text === "string") bytes = Buffer.from(mock.text, "utf8");
+    else return null;
+    return { bytes, name: mock.fileName ?? "mock-upload.bin", mediaType: mock.mediaType };
+  }
+
   record(entry) {
     this.outgoing.push(entry);
     if (this.outgoingFile) {
@@ -307,7 +476,7 @@ class Bridge {
       this.state.botOpenId = next;
       this.saveState();
     }
-    this.logger.info(`[lark-bridge] started transport=${this.config.transport} workspace=${this.config.workspace} state=${this.config.stateFile}`);
+    this.logger.info(`[lark-bridge] started transport=${this.config.transport} workspace=${this.config.workspace} uploads=${this.config.uploadsDir} state=${this.config.stateFile}`);
   }
 
   loadState() {
@@ -320,7 +489,7 @@ class Bridge {
         this.state.botOpenId = parsed.botOpenId ?? "";
       }
     } catch (error) {
-      this.logger.warn(`[lark-bridge] could not read state file ${file}: ${error instanceof Error ? error.message : String(error)}`);
+      this.logger.warn(`[lark-bridge] could not read state file ${file}: ${errorMessage(error)}`);
     }
   }
 
@@ -333,7 +502,7 @@ class Bridge {
       writeFileSync(tmp, JSON.stringify(this.state, null, 2) + "\n");
       renameSync(tmp, file);
     } catch (error) {
-      this.logger.warn(`[lark-bridge] could not write state file ${file}: ${error instanceof Error ? error.message : String(error)}`);
+      this.logger.warn(`[lark-bridge] could not write state file ${file}: ${errorMessage(error)}`);
     }
   }
 
@@ -361,7 +530,7 @@ class Bridge {
       await this.transport.reply(messageId, text);
       this.logger.info(`[lark-bridge] replied to ${chatId} (${messageId}): ${text.slice(0, 60).replace(/\n/g, " ")}`);
     } catch (error) {
-      this.logger.warn(`[lark-bridge] reply to ${chatId} failed: ${error instanceof Error ? error.message : String(error)}`);
+      this.logger.warn(`[lark-bridge] reply to ${chatId} failed: ${errorMessage(error)}`);
     }
   }
 
@@ -379,18 +548,136 @@ class Bridge {
     const isGroup = message.chat_type === "group";
     if (isGroup && this.config.replyToMentionOnly && !this.isBotMentioned(message)) return;
 
-    if (message.message_type !== "text") {
-      await this.safeReply(chatId, messageId, "📝 目前只支持文本消息，请直接输入文字。");
+    if (message.message_type === "text") {
+      const text = textOfMessage(message);
+      if (text === "") return;
+      if (text.startsWith("/")) {
+        await this.handleCommand(chatId, messageId, sender, text);
+        return;
+      }
+      await this.enqueue(chatId, messageId, { blocks: [{ type: "text", text }], logText: text });
+      return;
+    }
+    await this.handleNonText(chatId, messageId, message);
+  }
+
+  async handleNonText(chatId, messageId, message) {
+    const kind = message.message_type;
+    if (kind === "post") {
+      const text = textOfPost(message.content);
+      if (text !== "") {
+        await this.enqueue(chatId, messageId, { blocks: [{ type: "text", text }], logText: `📝 ${text.slice(0, 60)}` });
+        return;
+      }
+      await this.safeReply(chatId, messageId, "📝 这条富文本消息没有可读文字内容。");
+      return;
+    }
+    if (kind === "sticker") {
+      await this.safeReply(chatId, messageId, "😀 暂不支持表情包消息，请直接发送文字、图片或文件。");
+      return;
+    }
+    if (kind !== "image" && kind !== "file" && kind !== "media") {
+      await this.safeReply(chatId, messageId, `📭 暂不支持消息类型「${kind}」，请发送文字、图片、视频/音频或文件。`);
+      return;
+    }
+    await this.handleResourceMessage(chatId, messageId, message);
+  }
+
+  /** Download, save, attach, and enqueue one image/file/media message. */
+  async handleResourceMessage(chatId, messageId, message) {
+    let resource;
+    try {
+      resource = await this.transport.downloadResource(message);
+    } catch (error) {
+      this.logger.warn(`[lark-bridge] resource download failed for ${message.message_id}: ${errorMessage(error)}`);
+      await this.safeReply(chatId, messageId, `💾 下载附件失败：${errorMessage(error)}`);
+      return;
+    }
+    if (!resource || resource.bytes.byteLength === 0) {
+      await this.safeReply(chatId, messageId, "💾 附件内容为空，无法处理。");
+      return;
+    }
+    if (resource.bytes.byteLength > this.config.maxUploadBytes) {
+      await this.safeReply(chatId, messageId, `📦 附件过大（${formatBytes(resource.bytes.byteLength)}，上限 ${formatBytes(this.config.maxUploadBytes)}），无法处理。`);
       return;
     }
 
-    const text = textOfMessage(message);
-    if (text === "") return;
-    if (text.startsWith("/")) {
-      await this.handleCommand(chatId, messageId, sender, text);
-      return;
+    const savedPath = await this.saveUpload(resource);
+    const blocks = [];
+    const lines = [
+      `📎 收到${labelOfKind(message.message_type)}：${savedPath}`,
+      `（原文件名：${resource.name ?? "未知"}，大小：${formatBytes(resource.bytes.byteLength)}）`
+    ];
+    if (message.message_type === "image") {
+      const ref = await this.attachImageIfPossible(resource);
+      if (ref) {
+        blocks.push({ type: "image", attachment: ref });
+        lines.push("（图片已附加给模型查看）");
+      } else {
+        lines.push("（当前模型不支持直接读图，agent 可用 read_image 等工具解读）");
+      }
     }
-    await this.enqueue(chatId, messageId, text);
+    lines.push("");
+    lines.push("请解读并处理以上内容，把结果回复给我。");
+    const text = lines.join("\n");
+    blocks.unshift({ type: "text", text });
+    await this.enqueue(chatId, messageId, {
+      blocks,
+      logText: `📎 ${labelOfKind(message.message_type)}: ${resource.name ?? savedPath}`
+    });
+  }
+
+  /** Save downloaded bytes under the uploads directory with a safe name. */
+  async saveUpload(resource) {
+    const uploadsDir = resolve(this.config.uploadsDir);
+    await mkdirSync(uploadsDir, { recursive: true });
+    const ext = extOf(resource.name, resource.mediaType);
+    const base = safeFilename(resource.name, ext);
+    let target = join(uploadsDir, base);
+    if (existsSync(target)) {
+      target = join(uploadsDir, `${base.slice(0, -ext.length || undefined) || base}-${randomUUID().slice(0, 8)}${ext}`);
+    }
+    writeFileSync(target, resource.bytes);
+    this.logger.info(`[lark-bridge] saved upload ${target} (${resource.bytes.byteLength} bytes)`);
+    return target;
+  }
+
+  /** Whether the current default model declares image input. */
+  async modelSupportsImage() {
+    try {
+      const defaultModel = this.ctx.get("agentDefaultModel");
+      const llm = this.ctx.get("llm");
+      if (!defaultModel || !llm) return false;
+      const selection = defaultModel.currentSelection();
+      if (!selection?.provider || !selection.model) return false;
+      const info = await llm.resolveModelInfo(selection.provider, selection.model);
+      return info.inputModalities?.includes("image") ?? false;
+    } catch (error) {
+      this.logger.warn(`[lark-bridge] image capability check failed (${errorMessage(error)}); treating as no image input`);
+      return false;
+    }
+  }
+
+  /** Attach an image to the turn when the model is image-capable. */
+  async attachImageIfPossible(resource) {
+    if (this.config.imageMode === "file") return null;
+    const mediaType = detectImageMediaType(resource.bytes, resource.name);
+    if (mediaType === null) return null;
+    const vision = await this.modelSupportsImage();
+    if (!vision) {
+      this.logger.info("[lark-bridge] current model has no image input; image saved to disk only");
+      return null;
+    }
+    const attachments = this.ctx.get("attachments");
+    if (!attachments) return null;
+    try {
+      const ref = await attachments.saveImage({ data: new Uint8Array(resource.bytes), mediaType, name: resource.name });
+      this.logger.info(`[lark-bridge] attached image ${ref.attachmentId} (${mediaType}, ${ref.width}x${ref.height})`);
+      return ref;
+    } catch (error) {
+      this.logger.warn(`[lark-bridge] image attach failed (${errorMessage(error)}); image saved to disk only`);
+      return null;
+    }
   }
 
   async handleCommand(chatId, messageId, sender, text) {
@@ -406,7 +693,7 @@ class Bridge {
         const sessionId = chat?.handle ? String(chat.handle.agent.session.id) : "（尚无）";
         const model = await this.currentModelLabel();
         const queue = chat ? chat.queue.length : 0;
-        await this.safeReply(chatId, messageId, `📊 状态\n· 会话: ${sessionId}\n· 模型: ${model}\n· 排队消息: ${queue}\n· 工作目录: ${this.config.workspace}`);
+        await this.safeReply(chatId, messageId, `📊 状态\n· 会话: ${sessionId}\n· 模型: ${model}\n· 排队消息: ${queue}\n· 工作目录: ${this.config.workspace}\n· 上传目录: ${this.config.uploadsDir}`);
         break;
       }
       case "/whoami": {
@@ -434,13 +721,13 @@ class Bridge {
     return "（未配置）";
   }
 
-  async enqueue(chatId, messageId, text) {
+  async enqueue(chatId, messageId, item) {
     let chat = this.chats.get(chatId);
     if (!chat) {
       chat = { handle: null, busy: false, queue: [] };
       this.chats.set(chatId, chat);
     }
-    chat.queue.push({ messageId, text });
+    chat.queue.push({ messageId, blocks: item.blocks, logText: item.logText });
     if (this.config.ackEnabled) {
       await this.safeReply(chatId, messageId, "⏳ 收到，DSH 正在处理（复杂任务可能需要几分钟）…");
     }
@@ -458,7 +745,7 @@ class Bridge {
           await this.runTurn(chatId, chat, item);
         } catch (error) {
           this.logger.error(`[lark-bridge] turn failed for chat ${chatId}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
-          await this.safeReply(chatId, item.messageId, `💥 处理失败：${error instanceof Error ? error.message : String(error)}`);
+          await this.safeReply(chatId, item.messageId, `💥 处理失败：${errorMessage(error)}`);
         }
       }
     } finally {
@@ -486,7 +773,7 @@ class Bridge {
         this.logger.info(`[lark-bridge] resumed session ${savedSessionId} for chat ${chatId}`);
         return handle;
       } catch (error) {
-        this.logger.warn(`[lark-bridge] resume of ${savedSessionId} failed (${error instanceof Error ? error.message : String(error)}); creating a fresh session`);
+        this.logger.warn(`[lark-bridge] resume of ${savedSessionId} failed (${errorMessage(error)}); creating a fresh session`);
         delete this.state.chats[chatId];
         this.saveState();
       }
@@ -512,12 +799,12 @@ class Bridge {
     }
     const agent = handle.agent;
     const startedAt = Date.now();
-    this.logger.info(`[lark-bridge] turn start for ${chatId} (${item.messageId}): ${item.text.slice(0, 60).replace(/\n/g, " ")}`);
+    this.logger.info(`[lark-bridge] turn start for ${chatId} (${item.messageId}): ${String(item.logText ?? "").slice(0, 60)}`);
 
     await agent.whenIdle();
     const firstSeq = agent.session.seq;
     agent.followup(createUserMessage({
-      content: [{ type: "text", text: item.text }],
+      content: item.blocks,
       source: { kind: "user" }
     }));
     await agent.whenIdle();
@@ -545,7 +832,7 @@ class Bridge {
       try {
         await chat.handle.dispose();
       } catch (error) {
-        this.logger.warn(`[lark-bridge] dispose of chat ${chatId} failed: ${error instanceof Error ? error.message : String(error)}`);
+        this.logger.warn(`[lark-bridge] dispose of chat ${chatId} failed: ${errorMessage(error)}`);
       }
       this.chatBySession.delete(String(chat.handle.agent.session.id));
       chat.handle = null;
@@ -585,6 +872,8 @@ function apply(ctx, config) {
   const workspace = resolve(config.workspace || process.env.LARK_WORKSPACE || process.cwd());
   mkdirSync(workspace, { recursive: true });
   const home = process.env.DSH_HOME || join(homedir(), ".dsh");
+  const uploadsDir = resolve(config.uploadsDir || join(workspace, UPLOAD_SUBDIR));
+  mkdirSync(uploadsDir, { recursive: true });
   const bridge = new Bridge({
     ctx,
     config: {
@@ -592,6 +881,7 @@ function apply(ctx, config) {
       appId,
       appSecret,
       workspace,
+      uploadsDir,
       stateFile: config.stateFile || join(home, "lark-bridge-state.json")
     },
     logger

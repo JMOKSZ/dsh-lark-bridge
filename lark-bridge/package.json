@@ -1,7 +1,7 @@
 {
   "name": "@dsh/lark-bridge",
-  "version": "0.1.0",
-  "description": "Feishu (Lark) entry point for DSH: drive harness agents from a Feishu bot over the long-connection event channel.",
+  "version": "0.2.0",
+  "description": "Feishu (Lark) entry point for DSH: drive harness agents from a Feishu bot over the long-connection event channel, with image/file/video/audio attachment support.",
   "type": "module",
   "main": "lib/index.js",
   "files": [

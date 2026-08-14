@@ -17,6 +17,7 @@
           - id: mock-model
             contextWindow: 16384
             maxTokens: 1024
+            input: ["text", "image"]
 
 - id: lark-bridge
   config:
@@ -24,3 +25,5 @@
     mockPort: 4780
     mockOutgoingFile: ./test/run/mock-out.jsonl
     replyToMentionOnly: true
+    workspace: ./test/run
+    uploadsDir: ./test/run/.lark-uploads

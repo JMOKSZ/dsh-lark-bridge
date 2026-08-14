@@ -5,6 +5,7 @@
 .sdk-inspect/
 test/run/
 *.log
+.lark-uploads/
 
 # Private business data exported from Feishu — never publish
 lark_data/

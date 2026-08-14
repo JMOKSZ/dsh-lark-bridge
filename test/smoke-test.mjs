@@ -212,6 +212,45 @@ async function main() {
     const session3 = statusReply3.text.match(/会话: (\S+)/)?.[1];
     check("/new starts a new session", session1 !== undefined && session3 !== undefined && session1 !== session3, `${session1} -> ${session3}`);
 
+    // 11. Image upload: saved to the uploads dir AND attached (mock model is image-capable).
+    const pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const imgMsg = incoming({
+      message_id: "om_test_10",
+      message_type: "image",
+      content: JSON.stringify({ image_key: "img_v2_mock" }),
+      mockResource: { fileName: "pixel.png", mediaType: "image/png", base64: pngBase64 }
+    });
+    await post(MOCK_BRIDGE_PORT, "/incoming", imgMsg);
+    const imgReply = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_10" && e.text.includes("MOCK-REPLY"));
+    check("image upload processed with saved path", imgReply.text.includes("收到图片") && imgReply.text.includes(".lark-uploads"), imgReply.text.replace(/\n/g, " ").slice(0, 120));
+    const uploadsDir = join(RUN, ".lark-uploads");
+    const uploads = fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir) : [];
+    check("image bytes saved to uploads dir", uploads.some((f) => f.endsWith(".png")), uploads.join(", "));
+    const attachmentsRoot = join(DSH_HOME, "attachments", "v1", "objects");
+    const objects = fs.existsSync(attachmentsRoot) ? fs.readdirSync(attachmentsRoot) : [];
+    check("image attached through attachments store", objects.length > 0, `objects dirs: ${objects.join(", ")}`);
+
+    // 12. File upload: saved + absolute path included for the agent.
+    const fileMsg = incoming({
+      message_id: "om_test_11",
+      message_type: "file",
+      content: JSON.stringify({ file_key: "file_v4_mock", file_name: "notes.txt", file_size: 15 }),
+      mockResource: { fileName: "notes.txt", text: "hello lark file" }
+    });
+    await post(MOCK_BRIDGE_PORT, "/incoming", fileMsg);
+    const fileReply = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_11" && e.text.includes("MOCK-REPLY"));
+    check("file upload processed with saved path", fileReply.text.includes("收到文件") && fileReply.text.includes("notes.txt"), fileReply.text.replace(/\n/g, " ").slice(0, 120));
+
+    // 13. Post (rich text) message: reduced to plain text and processed.
+    const postMsg = incoming({
+      message_id: "om_test_12",
+      message_type: "post",
+      content: JSON.stringify({ title: "标题A", content: [[{ tag: "text", text: "富文本内容B" }]] })
+    });
+    await post(MOCK_BRIDGE_PORT, "/incoming", postMsg);
+    const postReply = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_12" && e.text.includes("MOCK-REPLY"));
+    check("post message reduced to text", postReply.text.includes("标题A") && postReply.text.includes("富文本内容B"), postReply.text.replace(/\n/g, " ").slice(0, 120));
+
     console.log("\n--- bridge log (tail) ---");
     console.log(bridgeLog.split("\n").slice(-25).join("\n"));
   } catch (error) {

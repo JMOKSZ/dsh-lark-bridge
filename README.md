@@ -7,6 +7,10 @@
 ## 功能特性
 
 - 📩 **消息收发**：文本消息 → DSH agent → 回答回复到原消息（先回「⏳ 收到」确认，完成后回最终答案）
+- 🖼️ **图片解读**：用户发送的图片经「获取消息中的资源」API 下载，保存到上传目录；若当前模型支持图像输入（如视觉模型），图片会作为附件块直接附加给模型查看；否则 agent 可调用 `read_image` 等工具处理
+- 📄 **文件处理**：文件（文档/表格/压缩包等）保存到上传目录，绝对路径随消息交给 agent，由 agent 用工具读取分析
+- 🎬 **视频/音频**：下载保存到上传目录，agent 可用 ffprobe/ffmpeg 等工具提取信息或转码处理
+- 📝 **富文本**：`post` 富文本消息自动提取纯文本
 - 🧵 **多会话**：每个飞书 chat（单聊或群）一个独立 DSH session，互不干扰
 - ♻️ **跨重启恢复**：chat→session 映射持久化在 `$DSH_HOME/lark-bridge-state.json`，桥接重启后自动 `agents.resume()` 恢复上下文
 - 👥 **群聊 @ 过滤**：默认只在被 @ 时才响应群消息（可关闭）
@@ -54,6 +58,7 @@
    - `im:message:send_as_bot` — 以应用的身份发消息
    - `im:message.group_at_msg` — 获取群组中所有消息（群聊 @ 场景需要）
    - `im:chat` — 获取群组信息
+   - `im:resource` — 获取消息中的图片与文件资源（v2.0 上传图片/文件/视频/音频**必需**）
 5. 「事件与回调」→「事件配置」→ 添加事件 **`im.message.receive_v1`（接收消息）**；
    订阅方式务必选择 **「使用长连接接收事件」**（WebSocket 长连接，不需要填写回调地址）。
 6. 「可用范围」设为需要使用的成员/部门；把机器人拉进目标群，或让使用者在飞书里搜索应用名并进入单聊。
@@ -122,6 +127,9 @@ cp lark/cordis.patch.yml "$HOME/.dsh/profiles/lark/cordis.patch.yml"
 | `includeErrorDetails` | `true` | 出错时是否把错误码/信息带回飞书 |
 | `workspace` | 启动目录 | agent 工作目录（等价于 `LARK_WORKSPACE`） |
 | `transport` | `"lark"` | `"lark"` 或 `"mock"`（离线测试） |
+| `uploadsDir` | `<workspace>/.lark-uploads` | 上传文件（图片/文件/视频/音频）的保存目录 |
+| `imageMode` | `"attach"` | 图片处理方式：`"attach"` 在模型支持图像输入时附加图片块（并落盘）；`"file"` 只落盘、由 agent 用 `read_image` 等工具读取 |
+| `maxUploadBytes` | `104857600`（100MB） | 单个附件大小上限（飞书资源接口上限 100MB） |
 
 ### 模型配置
 
@@ -130,6 +138,8 @@ cp lark/cordis.patch.yml "$HOME/.dsh/profiles/lark/cordis.patch.yml"
 - **环境变量**：`export DEEPSEEK_API_KEY=sk-xxx`（DeepSeek 官方 API）
 - **凭据文件**：在 `$DSH_HOME/.credentials.yaml` 写入 `DEEPSEEK_API_KEY: sk-xxx`（0600 权限，由 DSH 凭据服务管理）
 - **其他模型**：在 `$DSH_HOME/settings.yaml` 配置 `llm-pi-ai.providers` 或 `llm-deepseek` 段，并在 `cordis.patch.yml` 覆盖 `agent-default-model` 行
+
+> **视觉模型**：要让机器人直接“看懂”图片（图片块附加给模型），请配置声明了 `image` 输入模态的模型（如 OpenAI 系多模态模型，经 `llm-pi-ai` 网关接入）。当前 DeepSeek 官方 API 模型为纯文本：图片会落盘，agent 可调用 `read_image` 工具读取（工具对模型能力有同样的门控），或由你切换视觉模型后自动升级为直接看图。
 
 ## 第四步：运行
 
@@ -192,13 +202,17 @@ launchctl unload ~/Library/LaunchAgents/com.jmoksz.dsh-lark-bridge.plist # 停�
 - **单聊**：直接发文字消息。
 - **群聊**：@机器人 后发消息（默认只响应被 @ 的消息）。
 - 每条消息先收到「⏳ 收到，DSH 正在处理…」，处理完成后收到最终回答（回复在原消息下方）。
+- **上传文件**：直接发送图片 / 文件 / 视频 / 音频即可。桥接会下载资源并处理：
+  - 图片 → 保存到上传目录，视觉模型下直接附加给模型“看图”（也可配合文字说明）；
+  - 文件 / 视频 / 音频 → 保存到上传目录，agent 用工具读取、分析或转码；
+  - 可同时发一条文字说明，例如：`这张图里有什么？`、`帮我整理这个 Excel 的月度汇总`、`这个视频有多长、分辨率多少？`。
 - 命令：
   - `/new` — 开启新会话（清空本会话上下文）
-  - `/status` — 查看会话 ID、模型、排队数、工作目录
+  - `/status` — 查看会话 ID、模型、排队数、工作目录、上传目录
   - `/whoami` — 查看你的 open_id / chat_id
   - `/help` — 帮助
 
-示例：`帮我看看当前目录下有哪些文件`、`运行测试并把结果告诉我`、`把这段需求写成一个 TODO 清单`。
+示例：`帮我看看当前目录下有哪些文件`、`运行测试并把结果告诉我`、`把这段需求写成一个 TODO 清单`、`这张截图里写了什么`、`分析这份财务报表并给我摘要`。
 
 ## 测试（离线冒烟）
 
@@ -208,7 +222,7 @@ launchctl unload ~/Library/LaunchAgents/com.jmoksz.dsh-lark-bridge.plist # 停�
 node test/smoke-test.mjs
 ```
 
-覆盖：profile 启动、消息→agent→回复（mock 模型）、群聊 @ 过滤、会话跨消息恢复、`/new` 重开会话、状态持久化。预期输出 `10/10 checks passed`。
+覆盖：profile 启动、消息→agent→回复（mock 模型）、群聊 @ 过滤、会话跨消息恢复、`/new` 重开会话、状态持久化、图片上传（落盘 + 附件块）、文件上传、富文本提取。预期输出 `15/15 checks passed`。
 
 ## 更新插件
 
@@ -221,7 +235,8 @@ cd dsh-lark-bridge && git pull
 ## 安全说明
 
 - **不要把凭据提交进仓库**：`LARK_APP_ID` / `LARK_APP_SECRET` / `DEEPSEEK_API_KEY` 等一律通过环境变量或 `$DSH_HOME/.credentials.yaml` 注入；`.gitignore` 已排除 `.env`、`*.pem`、`lark-bridge-state.json`。
-- 桥接只响应「文本」消息；群聊默认需 @，避免被无关消息触发。
+- 群聊默认需 @，避免被无关消息触发；上传目录（`.lark-uploads`）会被 agent 读取，请把上传目录放在可信任的位置。
+- 上传的文件会保存在工作区（默认 `<workspace>/.lark-uploads`），与 DSH 会话日志一样属于本机数据；如需清理可定期删除该目录。
 - 回复内容可能包含 agent 读取到的本地文件信息，请控制「可用范围」与「@ 权限」。
 
 ## 排错
@@ -231,13 +246,17 @@ cd dsh-lark-bridge && git pull
 | 启动报 `LARK_APP_ID / LARK_APP_SECRET are required` | 未设置凭据，见「第三步：配置」 |
 | 长连接一直重连 / `onError` | 确认开放平台事件订阅方式为「长连接」，应用已发布，可用范围包含当前租户 |
 | 群聊不响应 | 确认已 @ 机器人、机器人在群内、`im:message.group_at_msg` 权限已发布 |
+| 发送图片/文件后回复「💾 下载附件失败」 | 确认 `im:resource` 权限已添加并**重新发布版本** |
+| 图片没附加给模型（日志提示 no image input） | 当前模型为纯文本模型；配置视觉模型（声明 `image` 输入）后自动升级 |
 | 回复报 `MISSING_CREDENTIAL` | 模型 key 未配置：`DEEPSEEK_API_KEY` 或 `$DSH_HOME/.credentials.yaml` |
 | 机器人回复「💥 任务出错」 | 看桥接进程日志中的错误码；`includeErrorDetails: true` 时错误码会直接带回飞书 |
 | 进程没日志 | 日志走 stdout/stderr，用 nohup/launchd 重定向到文件查看 |
 
-## 已知限制（v0.1）
+## 已知限制（v0.2）
 
-- 只处理文本消息（图片/文件/富文本暂不支持）。
+- 表情包（sticker）与合并转发/卡片消息暂不支持（飞书资源接口本身限制）。
+- 附件上限 100MB（飞书接口限制），可经 `maxUploadBytes` 调低。
+- 图片附加给模型依赖模型声明 `image` 输入模态；纯文本模型下图片落盘 + `read_image` 工具兜底。
 - 处理期间只发「确认 + 最终回答」，不逐条推送工具过程。
 - 群聊共享一个会话上下文（同群所有人共用），不同群/单聊彼此隔离。
 - 回复超过 `maxReplyChars`（默认 20000 字符）会被截断。
