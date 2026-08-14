@@ -1,0 +1,21 @@
+# Test / local artifacts
+.dsh-test/
+.pnpm-store/
+.npm-cache/
+.sdk-inspect/
+test/run/
+*.log
+
+# Private business data exported from Feishu — never publish
+lark_data/
+
+# Secrets and local state
+.env
+.env.*
+!.env.example
+*.pem
+.credentials.yaml
+lark-bridge-state.json
+
+# macOS
+.DS_Store

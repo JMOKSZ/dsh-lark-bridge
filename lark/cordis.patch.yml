@@ -1,0 +1,20 @@
+# Your patch layer for the lark profile, applied after the bundle layers:
+# a deployment persona plus the lark-bridge configuration. The bridge reads
+# the Feishu app credentials from the launching environment by default
+# (LARK_APP_ID / LARK_APP_SECRET); you can pin literals here instead, or add
+# other row overrides for this profile (e.g. DSH_TOOLS_MODE, tool rows).
+
+- id: system-prompt
+  config:
+    persona: >-
+      You are a coding agent powered by the {{model}} model. Your working
+      directory is {{cwd}}. You are reached remotely through a Feishu bot:
+      reply concisely in the same language the user wrote in, keep answers
+      suitable for a chat window, and say what you actually did.
+
+- id: lark-bridge
+  config:
+    appId: !!js process.env.LARK_APP_ID
+    appSecret: !!js process.env.LARK_APP_SECRET
+    replyToMentionOnly: true
+    workspace: !!js process.env.LARK_WORKSPACE

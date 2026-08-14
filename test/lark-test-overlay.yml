@@ -1,0 +1,26 @@
+# Test overlay for the lark profile (applied with `--patch`): swap in a mock
+# model route and the mock Feishu transport so the whole pipeline can be
+# exercised offline. Production runs must NOT use this file.
+- id: agent-default-model
+  config:
+    provider: mock
+    model: mock-model
+
+- id: llm-pi-ai
+  config:
+    providers:
+      mock:
+        apiKeyEnv: MOCK_LLM_KEY
+        api: openai-completions
+        baseURL: http://127.0.0.1:4799/v1
+        models:
+          - id: mock-model
+            contextWindow: 16384
+            maxTokens: 1024
+
+- id: lark-bridge
+  config:
+    transport: mock
+    mockPort: 4780
+    mockOutgoingFile: ./test/run/mock-out.jsonl
+    replyToMentionOnly: true

@@ -1,0 +1,7 @@
+# The @dsh/lark-bridge bundle patch: mounts the Feishu bridge row over the
+# profile root. The row carries no secrets: credentials are read by the plugin
+# from its config (usually the profile's cordis.patch.yml, which may bind them
+# to environment variables) with LARK_APP_ID / LARK_APP_SECRET as the fallback.
+- insert:
+    - id: lark-bridge
+      name: '@dsh/lark-bridge'
