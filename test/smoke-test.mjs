@@ -102,8 +102,26 @@ async function main() {
   // otherwise trip ERR_PNPM_UNEXPECTED_STORE).
   rmSync(join(DSH_HOME, "profiles", "lark"), { recursive: true, force: true });
 
-  // 0. Set up the profile under the workspace DSH_HOME.
-  const setup = spawnSync("bash", [join(REPO, "scripts", "setup-lark-profile.sh")], {
+  // 0. Pack the plugin from the repo root and install it from the tarball.
+  //    A tarball install goes through the pnpm store exactly like a
+  //    `github:` or npm install, so this validates that the plugin resolves
+  //    its @deepseek-ai/* dependencies in the real install layout.
+  const fs = await import("node:fs");
+  const pack = spawnSync("pnpm", ["pack", "--pack-destination", RUN], {
+    cwd: REPO,
+    env: { ...process.env },
+    stdio: "inherit"
+  });
+  if (pack.status !== 0) {
+    console.error("pnpm pack failed");
+    process.exit(1);
+  }
+  const tgz = fs.readdirSync(RUN).find((f) => f.endsWith(".tgz"));
+  if (!tgz) {
+    console.error("no tarball produced by pnpm pack");
+    process.exit(1);
+  }
+  const setup = spawnSync("dsh", ["plugin", "--profile", "lark", "add", join(RUN, tgz), "--ignore-scripts"], {
     cwd: REPO,
     env: { ...process.env, DSH_HOME },
     stdio: "inherit"
@@ -112,7 +130,7 @@ async function main() {
     console.error("profile setup failed");
     process.exit(1);
   }
-  check("profile setup", true);
+  check("profile setup from packed tarball", true);
 
   // 1. Start the mock LLM.
   const llm = spawn(process.execPath, [join(REPO, "test", "mock-llm-server.mjs")], {
@@ -195,7 +213,6 @@ async function main() {
     check("session resumes across messages", session1 !== undefined && session1 === session2, `${session1} -> ${session2}`);
 
     // 9. State file persisted (checked before /new, which clears the mapping).
-    const fs = await import("node:fs");
     const state = JSON.parse(fs.readFileSync(join(DSH_HOME, "lark-bridge-state.json"), "utf8"));
     check("state file persisted", state.chats?.["oc_test_chat"] === session1, String(state.chats?.["oc_test_chat"]));
 

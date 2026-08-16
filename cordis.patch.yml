@@ -1,9 +1,11 @@
-# Your patch layer for the lark profile, applied after the bundle layers:
-# a deployment persona plus the lark-bridge configuration. The bridge reads
-# the Feishu app credentials from the launching environment by default
-# (LARK_APP_ID / LARK_APP_SECRET); you can pin literals here instead, or add
-# other row overrides for this profile (e.g. DSH_TOOLS_MODE, tool rows).
-
+# The @dsh/lark-bridge bundle patch — applied after the dsh-base bundle layer
+# in any profile whose dsh.profile.bundles includes @dsh/lark-bridge.
+#
+# The patch is self-contained: it supplies a deployment persona (replacing the
+# base row's empty persona) and mounts the bridge row with environment-bound
+# configuration, so installing the plugin alone is enough to run. Override the
+# `lark-bridge` row in the profile's own cordis.patch.yml for pinned values
+# (e.g. literal appId/appSecret, replyToMentionOnly: false, uploadsDir, …).
 - id: system-prompt
   config:
     persona: >-
@@ -20,9 +22,11 @@
       honestly and tell the user what you could and could not determine —
       never describe visual content you have not actually seen.
 
-- id: lark-bridge
-  config:
-    appId: !!js process.env.LARK_APP_ID
-    appSecret: !!js process.env.LARK_APP_SECRET
-    replyToMentionOnly: true
-    workspace: !!js process.env.LARK_WORKSPACE
+- insert:
+    - id: lark-bridge
+      name: '@dsh/lark-bridge'
+      config:
+        appId: !!js process.env.LARK_APP_ID
+        appSecret: !!js process.env.LARK_APP_SECRET
+        replyToMentionOnly: true
+        workspace: !!js process.env.LARK_WORKSPACE

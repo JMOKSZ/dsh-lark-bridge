@@ -10,6 +10,9 @@ test/run/
 # Private business data exported from Feishu — never publish
 lark_data/
 
+# User's local working documents — never publish
+存量翻改专项报告_复盘.md
+
 # Secrets and local state
 .env
 .env.*

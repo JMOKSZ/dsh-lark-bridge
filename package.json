@@ -1,13 +1,14 @@
 {
   "name": "@dsh/lark-bridge",
-  "version": "0.2.0",
-  "description": "Feishu (Lark) entry point for DSH: drive harness agents from a Feishu bot over the long-connection event channel, with image/file/video/audio attachment support.",
+  "version": "0.3.0",
+  "description": "Feishu (Lark) entry point for DSH: one-command install plugin that lets users drive DSH agents from a Feishu bot over the long-connection event channel, with image/file/video/audio attachment support.",
   "type": "module",
   "main": "lib/index.js",
   "files": [
     "lib",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "dsh": {
     "bundle": {
@@ -15,13 +16,11 @@
     }
   },
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "^1.73.0"
-  },
-  "peerDependencies": {
     "@deepseek-ai/dsh-agent": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-session": "^0.1.0-rc.6",
-    "@deepseek-ai/schemastery": "^3.18.1"
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@larksuiteoapi/node-sdk": "^1.73.0"
   },
   "license": "MIT"
 }

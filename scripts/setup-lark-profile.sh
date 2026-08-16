@@ -1,22 +1,19 @@
 #!/usr/bin/env bash
 # setup-lark-profile.sh — create (or refresh) the `lark` DSH profile and
-# install the @dsh/lark-bridge plugin from this repository into it.
+# install the @dsh/lark-bridge plugin (this repository root) into it.
 #
 #   DSH_HOME=/path/to/home ./scripts/setup-lark-profile.sh
 #
-# DSH_HOME defaults to ~/.dsh. The script:
-#   1. initializes $DSH_HOME/profiles/lark via `dsh plugin`,
-#   2. installs the local lark-bridge package (its dsh.bundle declaration
-#      makes `dsh plugin` add it to the profile's bundle layer),
-#   3. installs the profile patch layer (persona + bridge config).
+# DSH_HOME defaults to ~/.dsh. The plugin bundle is self-contained (persona +
+# bridge row live in its own cordis.patch.yml), so no separate patch layer is
+# needed — this script only installs the plugin.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${DSH_HOME:=$HOME/.dsh}"
 PROFILE="lark"
 PROFILE_DIR="$DSH_HOME/profiles/$PROFILE"
-PLUGIN_DIR="$REPO_ROOT/lark-bridge"
-PATCH_SRC="$REPO_ROOT/lark/cordis.patch.yml"
+PLUGIN_DIR="$REPO_ROOT"
 
 command -v dsh >/dev/null 2>&1 || { echo "error: dsh not found on PATH" >&2; exit 1; }
 command -v pnpm >/dev/null 2>&1 || { echo "error: pnpm not found on PATH" >&2; exit 1; }
@@ -25,14 +22,10 @@ echo "==> DSH_HOME:   $DSH_HOME"
 echo "==> profile:    $PROFILE_DIR"
 echo "==> plugin:     $PLUGIN_DIR"
 
-# 1+2. Initialize the profile and install the plugin.
-# `dsh plugin` forwards the remaining arguments to pnpm inside the profile
-# directory and reconciles dsh.profile.bundles afterwards; because lark-bridge
-# declares dsh.bundle, it joins the bundle layer automatically. The plugin is
-# installed with the `file:` protocol (copied into the profile tree) so its
-# runtime imports resolve to the same in-box @deepseek-ai/* packages the
-# profile itself uses. A previous installation is removed first so re-running
-# this script always refreshes the plugin copy.
+# Install the plugin with the `file:` protocol (copied into the profile tree).
+# `dsh plugin` initializes the profile on first use, forwards to pnpm, and
+# adds @dsh/lark-bridge to dsh.profile.bundles because it declares dsh.bundle.
+# A previous installation is removed first so re-running refreshes the copy.
 if [ -f "$PROFILE_DIR/package.json" ] && grep -q '"@dsh/lark-bridge"' "$PROFILE_DIR/package.json"; then
   echo "==> refreshing existing @dsh/lark-bridge installation"
   DSH_HOME="$DSH_HOME" dsh plugin --profile "$PROFILE" remove @dsh/lark-bridge
@@ -43,12 +36,11 @@ fi
 # profile directory if you prefer to allow it.
 DSH_HOME="$DSH_HOME" dsh plugin --profile "$PROFILE" add "file:$PLUGIN_DIR" --ignore-scripts
 
-# 3. Install the profile patch layer.
-cp "$PATCH_SRC" "$PROFILE_DIR/cordis.patch.yml"
-echo "==> wrote $PROFILE_DIR/cordis.patch.yml"
-
 echo
 echo "==> done. Configure your Feishu app (see the repo README), then run:"
 echo "    LARK_APP_ID=cli_xxx LARK_APP_SECRET=xxx dsh --profile $PROFILE"
 echo "    (set LARK_WORKSPACE to the directory the agent should work in;"
 echo "     it defaults to the launching directory)"
+echo
+echo "==> 同事一键安装（无需本仓库）:"
+echo "    dsh plugin --profile lark add github:JMOKSZ/dsh-lark-bridge --ignore-scripts"

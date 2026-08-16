@@ -33,9 +33,10 @@
 
 | 路径 | 说明 |
 |---|---|
-| `lark-bridge/` | 插件包 `@dsh/lark-bridge`（cordis bundle：`lib/index.js` + `cordis.patch.yml` + `package.json`） |
-| `lark/cordis.patch.yml` | `lark` profile 的用户补丁层（persona + 桥配置） |
-| `scripts/setup-lark-profile.sh` | 一键创建/刷新 `$DSH_HOME/profiles/lark` 并安装插件 |
+| `lib/index.js` | 插件本体（cordis bundle：桥接 + 附件处理） |
+| `cordis.patch.yml` | 插件自带的 bundle 补丁（persona + 桥配置，装完即用，无需单独补丁文件） |
+| `package.json` | 插件清单（`dsh.bundle` 声明 → 安装后自动成为 profile 层） |
+| `scripts/setup-lark-profile.sh` | 本地开发用：创建/刷新 `$DSH_HOME/profiles/lark` |
 | `test/` | 离线端到端冒烟测试（mock 模型 + mock 飞书传输，无需真实应用/模型） |
 | `README.md` | 本文件 |
 
@@ -58,7 +59,7 @@
    - `im:message:send_as_bot` — 以应用的身份发消息
    - `im:message.group_at_msg` — 获取群组中所有消息（群聊 @ 场景需要）
    - `im:chat` — 获取群组信息
-   - `im:resource` — 获取消息中的图片与文件资源（v2.0 上传图片/文件/视频/音频**必需**）
+   - `im:resource` — 获取消息中的图片与文件资源（上传图片/文件/视频/音频**必需**）
 5. 「事件与回调」→「事件配置」→ 添加事件 **`im.message.receive_v1`（接收消息）**；
    订阅方式务必选择 **「使用长连接接收事件」**（WebSocket 长连接，不需要填写回调地址）。
 6. 「可用范围」设为需要使用的成员/部门；把机器人拉进目标群，或让使用者在飞书里搜索应用名并进入单聊。
@@ -66,36 +67,21 @@
 
 > 官方文档参考：[事件概述](https://open.feishu.cn/document/ukTMukTMukTM/uUTNz4SN1MjL1UzM.md?lang=zh-CN)、[机器人 FAQ](https://open.feishu.cn/document/faq/bot.md)。
 
-## 第二步：安装 lark profile
+## 第二步：安装（一条命令）
 
-### 方式 A：脚本一键安装（推荐）
-
-```bash
-git clone https://github.com/JMOKSZ/dsh-lark-bridge.git
-cd dsh-lark-bridge
-./scripts/setup-lark-profile.sh
-```
-
-脚本会：初始化 `$DSH_HOME/profiles/lark`（默认 `~/.dsh`）→ 把本仓库的 `lark-bridge` 以 `file:` 方式安装进 profile（其 `dsh.bundle` 声明会自动加入 bundle 层）→ 写入 persona 与桥配置补丁。
-
-自定义 `DSH_HOME`（多套环境隔离时）：
+**同事/任何机器**：不需要 clone 本仓库，直接安装插件包（自动创建 `lark` profile）：
 
 ```bash
-DSH_HOME=/path/to/home ./scripts/setup-lark-profile.sh
+dsh plugin --profile lark add github:JMOKSZ/dsh-lark-bridge --ignore-scripts
 ```
 
-> 脚本可重复执行：会先移除旧安装再重新复制插件，保证与仓库代码一致。
+> 也可从 npm 安装（发布后）：`dsh plugin --profile lark add @dsh/lark-bridge --ignore-scripts`。
 
-### 方式 B：手动安装
+插件自带 bundle 补丁（persona + 桥配置），安装即完成全部配置，**无需任何额外补丁文件**；`dsh plugin` 会自动把声明了 `dsh.bundle` 的 `@dsh/lark-bridge` 加入 `dsh.profile.bundles`。
 
-```bash
-# 1) 初始化 profile（bundles 默认只有 dsh-base）
-dsh plugin --profile lark add "file:/绝对路径/lark-bridge" --ignore-scripts
-# 2) 安装补丁层
-cp lark/cordis.patch.yml "$HOME/.dsh/profiles/lark/cordis.patch.yml"
-```
+**本地开发**：clone 后运行 `./scripts/setup-lark-profile.sh`（以 `file:` 方式安装本仓库副本，可重复执行以刷新代码）。
 
-`dsh plugin` 会自动把声明了 `dsh.bundle` 的 `@dsh/lark-bridge` 加入 `dsh.profile.bundles`。
+自定义 `DSH_HOME`（多套环境隔离时）：安装与运行时均 `export DSH_HOME=/path/to/home`。
 
 ## 第三步：配置
 
