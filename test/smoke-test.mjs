@@ -10,6 +10,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, rmSync } from "node:fs";
 import { createConnection } from "node:net";
 import { join, resolve } from "node:path";
+import { parseApprovalOutcome, parseBatch, parseQuestionAnswer } from "../lib/answers.js";
 
 const REPO = resolve(process.cwd());
 const DSH_HOME = join(REPO, ".dsh-test");
@@ -267,6 +268,36 @@ async function main() {
     await post(MOCK_BRIDGE_PORT, "/incoming", postMsg);
     const postReply = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_12" && e.text.includes("MOCK-REPLY"));
     check("post message reduced to text", postReply.text.includes("标题A") && postReply.text.includes("富文本内容B"), postReply.text.replace(/\n/g, " ").slice(0, 120));
+
+    // 14. Answer-parsing unit checks (v3.0).
+    const qOpt = { id: "a", question: "选哪个？", options: [{ label: "甲" }, { label: "乙" }] };
+    const u1 = parseQuestionAnswer(qOpt, "1");
+    check("answer: option by number", u1.selected.length === 1 && u1.selected[0] === "甲", JSON.stringify(u1));
+    const u2 = parseQuestionAnswer(qOpt, "乙");
+    check("answer: option by label", u2.selected[0] === "乙", JSON.stringify(u2));
+    const u3 = parseQuestionAnswer(qOpt, "自定义内容");
+    check("answer: custom overrides", u3.custom === "自定义内容" && u3.selected.length === 0, JSON.stringify(u3));
+    const u4 = parseQuestionAnswer({ id: "b", question: "多选？", options: [{ label: "x" }, { label: "y" }], multiSelect: true }, "1,2");
+    check("answer: multi-select", u4.selected.length === 2, JSON.stringify(u4));
+    const batch = parseBatch("1. 甲\n2. 都不要", [qOpt, { id: "c", question: "第二题", options: [{ label: "甲" }, { label: "乙" }] }]);
+    check("answer: batch by index", batch[0].selected[0] === "甲" && batch[1].custom === "都不要", JSON.stringify(batch));
+    const slashBatch = parseBatch("2/1", [qOpt, { id: "c", question: "第二题", options: [{ label: "甲" }, { label: "乙" }] }]);
+    check("answer: batch by slash positions", slashBatch[0].selected[0] === "乙" && slashBatch[1].selected[0] === "甲", JSON.stringify(slashBatch));
+    check("approval: allow words", parseApprovalOutcome("批准") === "allowed-once" && parseApprovalOutcome("1") === "allowed-once" && parseApprovalOutcome("yes") === "allowed-once");
+    check("approval: reject words", parseApprovalOutcome("拒绝") === "rejected" && parseApprovalOutcome("2") === "rejected" && parseApprovalOutcome("随便") === "rejected");
+
+    // 15. Interactive question flow: agent calls ask_user_question → question is
+    //     forwarded to the chat → user answers → the turn resumes and replies.
+    const askMsg = incoming({ message_id: "om_test_13", content: JSON.stringify({ text: "ASK_QUESTION 帮我选个方案" }) });
+    await post(MOCK_BRIDGE_PORT, "/incoming", askMsg);
+    const question = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "create" && e.text.includes("你想选哪个方案"));
+    check("question forwarded to chat with options", question.text.includes("方案A") && question.text.includes("1."), question.text.replace(/\n/g, " ").slice(0, 120));
+    const answerMsg = incoming({ message_id: "om_test_14", content: JSON.stringify({ text: "1" }) });
+    await post(MOCK_BRIDGE_PORT, "/incoming", answerMsg);
+    const answerAck = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_14" && e.text.includes("已收到回答"));
+    check("answer ack sent", Boolean(answerAck));
+    const afterAsk = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_13" && e.text.includes("MOCK-REPLY"));
+    check("turn resumed after answer", Boolean(afterAsk), afterAsk.text.replace(/\n/g, " ").slice(0, 80));
 
     console.log("\n--- bridge log (tail) ---");
     console.log(bridgeLog.split("\n").slice(-25).join("\n"));

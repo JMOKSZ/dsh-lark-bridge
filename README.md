@@ -11,6 +11,8 @@
 - 📄 **文件处理**：文件（文档/表格/压缩包等）保存到上传目录，绝对路径随消息交给 agent，由 agent 用工具读取分析
 - 🎬 **视频/音频**：下载保存到上传目录，agent 可用 ffprobe/ffmpeg 等工具提取信息或转码处理
 - 📝 **富文本**：`post` 富文本消息自动提取纯文本
+- 💬 **交互问答（v3.0）**：agent 需要你选择/确认时（`ask_user_question`、计划评审 `exit_plan_mode`），问题会带编号选项发到飞书，直接回复编号或文字即可，回合自动继续，不再卡死
+- 🔐 **工具审批（v3.0）**：需要审批的操作（如沙箱提权）会把「批准/拒绝」请求发到飞书，回复「1/批准」或「2/拒绝」即可
 - 🧵 **多会话**：每个飞书 chat（单聊或群）一个独立 DSH session，互不干扰
 - ♻️ **跨重启恢复**：chat→session 映射持久化在 `$DSH_HOME/lark-bridge-state.json`，桥接重启后自动 `agents.resume()` 恢复上下文
 - 👥 **群聊 @ 过滤**：默认只在被 @ 时才响应群消息（可关闭）
@@ -116,6 +118,9 @@ dsh plugin --profile lark add github:JMOKSZ/dsh-lark-bridge --ignore-scripts
 | `uploadsDir` | `<workspace>/.lark-uploads` | 上传文件（图片/文件/视频/音频）的保存目录 |
 | `imageMode` | `"attach"` | 图片处理方式：`"attach"` 在模型支持图像输入时附加图片块（并落盘）；`"file"` 只落盘、由 agent 用 `read_image` 等工具读取 |
 | `maxUploadBytes` | `104857600`（100MB） | 单个附件大小上限（飞书资源接口上限 100MB） |
+| `interactionEnabled` | `true` | 是否把 agent 的提问/审批转发到飞书（v3.0） |
+| `interactionTimeoutMs` | `600000`（10分钟） | 等待用户回复的超时；超时后取消该交互并提示 |
+| `agentPreset` | `"standard"` | agent 加入的预设（`standard` 提供 `ask_user_question` 与完整工具集）；`""` 表示不加入 |
 
 ### 模型配置
 
@@ -192,6 +197,12 @@ launchctl unload ~/Library/LaunchAgents/com.jmoksz.dsh-lark-bridge.plist # 停�
   - 图片 → 保存到上传目录，视觉模型下直接附加给模型“看图”（也可配合文字说明）；
   - 文件 / 视频 / 音频 → 保存到上传目录，agent 用工具读取、分析或转码；
   - 可同时发一条文字说明，例如：`这张图里有什么？`、`帮我整理这个 Excel 的月度汇总`、`这个视频有多长、分辨率多少？`。
+- **交互问答（v3.0）**：当 agent 需要你选择/确认/审批时，机器人会发来带编号选项的问题（或「批准/拒绝」请求）：
+  - 选择题：回复编号（如 `1`）或选项文字，或直接输入自定义内容；
+  - 多选：回复多个编号（逗号分隔）；
+  - 多题一批：按 `1. 回答`、`2. 回答` 逐行回复；
+  - 审批：回复 `1`/`批准`/`允许` 或 `2`/`拒绝`。
+  - 回复后 agent 会继续执行，无需重新发起任务；等待期间命令（`/status` 等）仍可用。
 - 命令：
   - `/new` — 开启新会话（清空本会话上下文）
   - `/status` — 查看会话 ID、模型、排队数、工作目录、上传目录
@@ -208,7 +219,7 @@ launchctl unload ~/Library/LaunchAgents/com.jmoksz.dsh-lark-bridge.plist # 停�
 node test/smoke-test.mjs
 ```
 
-覆盖：profile 启动、消息→agent→回复（mock 模型）、群聊 @ 过滤、会话跨消息恢复、`/new` 重开会话、状态持久化、图片上传（落盘 + 附件块）、文件上传、富文本提取。预期输出 `15/15 checks passed`。
+覆盖：profile 启动、消息→agent→回复（mock 模型）、群聊 @ 过滤、会话跨消息恢复、`/new` 重开会话、状态持久化、图片上传（落盘 + 附件块）、文件上传、富文本提取、交互问答全链路（问题转发 → 回答 → 回合继续）、答案解析与审批关键词。预期输出 `25/25 checks passed`。
 
 ## 更新插件
 
@@ -238,13 +249,14 @@ cd dsh-lark-bridge && git pull
 | 机器人回复「💥 任务出错」 | 看桥接进程日志中的错误码；`includeErrorDetails: true` 时错误码会直接带回飞书 |
 | 进程没日志 | 日志走 stdout/stderr，用 nohup/launchd 重定向到文件查看 |
 
-## 已知限制（v0.2）
+## 已知限制（v0.3）
 
 - 表情包（sticker）与合并转发/卡片消息暂不支持（飞书资源接口本身限制）。
 - 附件上限 100MB（飞书接口限制），可经 `maxUploadBytes` 调低。
 - 图片附加给模型依赖模型声明 `image` 输入模态；纯文本模型下图片落盘 + `read_image` 工具兜底。
 - 处理期间只发「确认 + 最终回答」，不逐条推送工具过程。
 - 群聊共享一个会话上下文（同群所有人共用），不同群/单聊彼此隔离。
+- 交互等待期间，该 chat 的下一条文本消息会被当作回答（可用 `/` 命令打断）。
 - 回复超过 `maxReplyChars`（默认 20000 字符）会被截断。
 
 ## License

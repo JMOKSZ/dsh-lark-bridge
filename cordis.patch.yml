@@ -23,6 +23,14 @@
       never describe visual content you have not actually seen.
 
 - insert:
+    # Agent preset roster (mirrors the web bundle): without it agents have no
+    # preset and ask_user_question / the full coding-agent tool set are absent.
+    # The launcher appends the shipped preset root once this row exists.
+    - id: agent-presets
+      name: '@deepseek-ai/dsh-agent-presets'
+      config:
+        default: standard
+
     - id: lark-bridge
       name: '@jmoksz/lark-bridge'
       config:
