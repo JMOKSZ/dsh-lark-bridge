@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # setup-lark-profile.sh — create (or refresh) the `lark` DSH profile and
-# install the @dsh/lark-bridge plugin (this repository root) into it.
+# install the @jmoksz/lark-bridge plugin (this repository root) into it.
 #
 #   DSH_HOME=/path/to/home ./scripts/setup-lark-profile.sh
 #
@@ -24,11 +24,11 @@ echo "==> plugin:     $PLUGIN_DIR"
 
 # Install the plugin with the `file:` protocol (copied into the profile tree).
 # `dsh plugin` initializes the profile on first use, forwards to pnpm, and
-# adds @dsh/lark-bridge to dsh.profile.bundles because it declares dsh.bundle.
+# adds @jmoksz/lark-bridge to dsh.profile.bundles because it declares dsh.bundle.
 # A previous installation is removed first so re-running refreshes the copy.
-if [ -f "$PROFILE_DIR/package.json" ] && grep -q '"@dsh/lark-bridge"' "$PROFILE_DIR/package.json"; then
-  echo "==> refreshing existing @dsh/lark-bridge installation"
-  DSH_HOME="$DSH_HOME" dsh plugin --profile "$PROFILE" remove @dsh/lark-bridge
+if [ -f "$PROFILE_DIR/package.json" ] && grep -q '"@jmoksz/lark-bridge"' "$PROFILE_DIR/package.json"; then
+  echo "==> refreshing existing @jmoksz/lark-bridge installation"
+  DSH_HOME="$DSH_HOME" dsh plugin --profile "$PROFILE" remove @jmoksz/lark-bridge
 fi
 # --ignore-scripts: the lark SDK's protobufjs postinstall is unnecessary (the
 # SDK ships prebuilt protobuf bundles) and pnpm v11 exits nonzero on ignored

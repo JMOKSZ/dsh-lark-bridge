@@ -2,7 +2,7 @@
 
 让使用者通过**飞书机器人**远程使用 [DSH（DeepSeek Harness）](https://github.com/deepseek-ai/deepseek-harness)：在飞书里给机器人发消息，机器人把消息交给运行在本机的 DSH agent 执行（读写文件、跑命令、搜索网页等），再把最终回答回复到飞书。支持单聊与群聊（群聊需要 @机器人），每个会话（单聊或群）对应一个可跨重启恢复的 DSH session。
 
-> 本质是一个 cordis 插件（`@dsh/lark-bridge`）+ 一个 DSH profile（`lark`）。不暴露任何端口，飞书消息通过官方**长连接**（WebSocket）到达，因此无需公网 IP、无需反向代理，在家/内网即可部署。
+> 本质是一个 cordis 插件（`@jmoksz/lark-bridge`）+ 一个 DSH profile（`lark`）。不暴露任何端口，飞书消息通过官方**长连接**（WebSocket）到达，因此无需公网 IP、无需反向代理，在家/内网即可部署。
 
 ## 功能特性
 
@@ -75,9 +75,9 @@
 dsh plugin --profile lark add github:JMOKSZ/dsh-lark-bridge --ignore-scripts
 ```
 
-> 也可从 npm 安装（发布后）：`dsh plugin --profile lark add @dsh/lark-bridge --ignore-scripts`。
+> 也可从 npm 安装（发布后）：`dsh plugin --profile lark add @jmoksz/lark-bridge --ignore-scripts`。
 
-插件自带 bundle 补丁（persona + 桥配置），安装即完成全部配置，**无需任何额外补丁文件**；`dsh plugin` 会自动把声明了 `dsh.bundle` 的 `@dsh/lark-bridge` 加入 `dsh.profile.bundles`。
+插件自带 bundle 补丁（persona + 桥配置），安装即完成全部配置，**无需任何额外补丁文件**；`dsh plugin` 会自动把声明了 `dsh.bundle` 的 `@jmoksz/lark-bridge` 加入 `dsh.profile.bundles`。
 
 **本地开发**：clone 后运行 `./scripts/setup-lark-profile.sh`（以 `file:` 方式安装本仓库副本，可重复执行以刷新代码）。
 

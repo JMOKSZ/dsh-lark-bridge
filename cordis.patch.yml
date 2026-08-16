@@ -1,5 +1,5 @@
-# The @dsh/lark-bridge bundle patch — applied after the dsh-base bundle layer
-# in any profile whose dsh.profile.bundles includes @dsh/lark-bridge.
+# The @jmoksz/lark-bridge bundle patch — applied after the dsh-base bundle layer
+# in any profile whose dsh.profile.bundles includes @jmoksz/lark-bridge.
 #
 # The patch is self-contained: it supplies a deployment persona (replacing the
 # base row's empty persona) and mounts the bridge row with environment-bound
@@ -24,7 +24,7 @@
 
 - insert:
     - id: lark-bridge
-      name: '@dsh/lark-bridge'
+      name: '@jmoksz/lark-bridge'
       config:
         appId: !!js process.env.LARK_APP_ID
         appSecret: !!js process.env.LARK_APP_SECRET
