@@ -59,13 +59,20 @@ const server = http.createServer((req, res) => {
       // message returns a tool call to ask_user_question; the follow-up turn
       // (with tool results) returns the ordinary text reply.
       const wantsAsk = allUserText.includes("ASK_QUESTION") && !messages.some((m) => m.role === "tool");
+      const wantMulti = allUserText.includes("ASK_QUESTION2");
       const toolCall = wantsAsk ? [{
         id: "call_mock_ask",
         type: "function",
         function: {
           name: "ask_user_question",
           arguments: JSON.stringify({
-            questions: [{
+            questions: wantMulti ? [{
+              id: "q_mock2",
+              header: "多选",
+              question: "选哪些项？",
+              options: [{ label: "x" }, { label: "y" }, { label: "z" }],
+              multi_select: true
+            }] : [{
               id: "q_mock",
               header: "选择方案",
               question: "你想选哪个方案？",

@@ -286,18 +286,33 @@ async function main() {
     check("approval: allow words", parseApprovalOutcome("批准") === "allowed-once" && parseApprovalOutcome("1") === "allowed-once" && parseApprovalOutcome("yes") === "allowed-once");
     check("approval: reject words", parseApprovalOutcome("拒绝") === "rejected" && parseApprovalOutcome("2") === "rejected" && parseApprovalOutcome("随便") === "rejected");
 
-    // 15. Interactive question flow: agent calls ask_user_question → question is
-    //     forwarded to the chat → user answers → the turn resumes and replies.
+    // 15. Interactive question flow (v3.1): agent calls ask_user_question →
+    //     an interactive CARD with option buttons is sent → clicking a button
+    //     (card.action.trigger) resumes the turn.
     const askMsg = incoming({ message_id: "om_test_13", content: JSON.stringify({ text: "ASK_QUESTION 帮我选个方案" }) });
     await post(MOCK_BRIDGE_PORT, "/incoming", askMsg);
-    const question = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "create" && e.text.includes("你想选哪个方案"));
-    check("question forwarded to chat with options", question.text.includes("方案A") && question.text.includes("1."), question.text.replace(/\n/g, " ").slice(0, 120));
-    const answerMsg = incoming({ message_id: "om_test_14", content: JSON.stringify({ text: "1" }) });
-    await post(MOCK_BRIDGE_PORT, "/incoming", answerMsg);
-    const answerAck = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_14" && e.text.includes("已收到回答"));
-    check("answer ack sent", Boolean(answerAck));
-    const afterAsk = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_13" && e.text.includes("MOCK-REPLY"));
-    check("turn resumed after answer", Boolean(afterAsk), afterAsk.text.replace(/\n/g, " ").slice(0, 80));
+    const card = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "card" && JSON.stringify(e.card).includes("你想选哪个方案"));
+    check("question card sent with buttons", Boolean(card) && JSON.stringify(card.card).includes("方案A") && JSON.stringify(card.card).includes('"tag":"button"'), JSON.stringify(card?.card).slice(0, 140));
+    // Extract the first button's value and simulate a click.
+    const firstButton = card.card.elements.find((el) => el.tag === "action").actions[0];
+    const click = await post(MOCK_BRIDGE_PORT, "/incoming", { kind: "card_action", chat_id: "oc_test_chat", message_id: card.message_id, value: firstButton.value });
+    const patched = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "patch" && e.message_id === card.message_id);
+    check("card patched to answered state", Boolean(patched) && JSON.stringify(patched.card).includes("已收到你的选择"), JSON.stringify(patched?.card).slice(0, 100));
+    const afterClick = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_13" && e.text.includes("MOCK-REPLY"));
+    check("turn resumed after card click", Boolean(afterClick), afterClick.text.replace(/\n/g, " ").slice(0, 80));
+
+    // 16. Multi-select question falls back to a TEXT prompt (not a card).
+    //     Uses a fresh chat so the mock's ask trigger fires (no tool history).
+    const multiMsg = incoming({ message_id: "om_test_15", chat_id: "oc_test_multi", content: JSON.stringify({ text: "ASK_QUESTION2 帮我选多项" }) });
+    await post(MOCK_BRIDGE_PORT, "/incoming", multiMsg);
+    const textQuestion = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "create" && e.text.includes("选哪些项"));
+    check("multi-select falls back to text prompt", Boolean(textQuestion), textQuestion.text.replace(/\n/g, " ").slice(0, 90));
+    const multiAnswer = incoming({ message_id: "om_test_16", chat_id: "oc_test_multi", content: JSON.stringify({ text: "1,2" }) });
+    await post(MOCK_BRIDGE_PORT, "/incoming", multiAnswer);
+    const multiAck = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_16" && e.text.includes("已收到回答"));
+    check("multi-select text answer ack", Boolean(multiAck));
+    const afterMulti = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_15" && e.text.includes("MOCK-REPLY"));
+    check("multi-select turn resumed", Boolean(afterMulti));
 
     console.log("\n--- bridge log (tail) ---");
     console.log(bridgeLog.split("\n").slice(-25).join("\n"));

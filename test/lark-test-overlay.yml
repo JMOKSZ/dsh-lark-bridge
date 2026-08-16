@@ -27,3 +27,4 @@
     replyToMentionOnly: true
     workspace: ./test/run
     uploadsDir: ./test/run/.lark-uploads
+    cardMode: true

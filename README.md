@@ -13,6 +13,7 @@
 - 📝 **富文本**：`post` 富文本消息自动提取纯文本
 - 💬 **交互问答（v3.0）**：agent 需要你选择/确认时（`ask_user_question`、计划评审 `exit_plan_mode`），问题会带编号选项发到飞书，直接回复编号或文字即可，回合自动继续，不再卡死
 - 🔐 **工具审批（v3.0）**：需要审批的操作（如沙箱提权）会把「批准/拒绝」请求发到飞书，回复「1/批准」或「2/拒绝」即可
+- 🎴 **消息卡片（v3.1）**：开启 `cardMode` 后，问题/审批用飞书交互卡片呈现（选项按钮、批准/拒绝按钮），点击即作答；需租户管理员订阅 `card.action.trigger` 事件后按钮生效，未订阅时回复编号/文字兜底
 - 🧵 **多会话**：每个飞书 chat（单聊或群）一个独立 DSH session，互不干扰
 - ♻️ **跨重启恢复**：chat→session 映射持久化在 `$DSH_HOME/lark-bridge-state.json`，桥接重启后自动 `agents.resume()` 恢复上下文
 - 👥 **群聊 @ 过滤**：默认只在被 @ 时才响应群消息（可关闭）
@@ -121,6 +122,7 @@ dsh plugin --profile lark add github:JMOKSZ/dsh-lark-bridge --ignore-scripts
 | `interactionEnabled` | `true` | 是否把 agent 的提问/审批转发到飞书（v3.0） |
 | `interactionTimeoutMs` | `600000`（10分钟） | 等待用户回复的超时；超时后取消该交互并提示 |
 | `agentPreset` | `"standard"` | agent 加入的预设（`standard` 提供 `ask_user_question` 与完整工具集）；`""` 表示不加入 |
+| `cardMode` | `false` | v3.1 卡片：`true` 时用飞书消息卡片（按钮）呈现问题/审批。**按钮点击需要租户管理员在开放平台订阅一次 `card.action.trigger` 事件（长连接）**；未订阅时按钮不可用，直接回复编号/文字仍可作答（卡片降级为静态展示，发送失败自动回退纯文本） |
 
 ### 模型配置
 
@@ -249,11 +251,12 @@ cd dsh-lark-bridge && git pull
 | 机器人回复「💥 任务出错」 | 看桥接进程日志中的错误码；`includeErrorDetails: true` 时错误码会直接带回飞书 |
 | 进程没日志 | 日志走 stdout/stderr，用 nohup/launchd 重定向到文件查看 |
 
-## 已知限制（v0.3）
+## 已知限制（v0.5）
 
 - 表情包（sticker）与合并转发/卡片消息暂不支持（飞书资源接口本身限制）。
 - 附件上限 100MB（飞书接口限制），可经 `maxUploadBytes` 调低。
 - 图片附加给模型依赖模型声明 `image` 输入模态；纯文本模型下图片落盘 + `read_image` 工具兜底。
+- **卡片按钮**（`cardMode: true`）需要租户管理员在开放平台订阅一次 `card.action.trigger` 事件（长连接）；未订阅时按钮点击无效，但直接回复编号/文字仍可作答。
 - 处理期间只发「确认 + 最终回答」，不逐条推送工具过程。
 - 群聊共享一个会话上下文（同群所有人共用），不同群/单聊彼此隔离。
 - 交互等待期间，该 chat 的下一条文本消息会被当作回答（可用 `/` 命令打断）。
