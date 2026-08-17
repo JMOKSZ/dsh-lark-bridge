@@ -1,5 +1,9 @@
 # DSH 飞书入口（Lark Bridge）
 
+[![npm](https://img.shields.io/npm/v/@jmoksz/lark-bridge)](https://www.npmjs.com/package/@jmoksz/lark-bridge)
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
+[![CI](https://github.com/JMOKSZ/dsh-lark-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/JMOKSZ/dsh-lark-bridge/actions)
+
 通过**飞书机器人**远程使用 [DSH（DeepSeek Harness）](https://github.com/deepseek-ai/deepseek-harness)：在飞书里给机器人发消息，机器人交给运行在本机的 DSH agent 执行（读写文件、跑命令、搜索网页等），处理过程用**流式消息卡片**实时呈现，最终回答 sealed 进卡片回复。
 
 本质是一个 cordis 插件（`@jmoksz/lark-bridge`）+ 一个 DSH profile（`lark`）。走官方**长连接**（WebSocket），无需公网 IP、无需反向代理，在家/内网即可部署。
