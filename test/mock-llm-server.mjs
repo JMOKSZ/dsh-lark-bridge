@@ -60,6 +60,9 @@ const server = http.createServer((req, res) => {
       // (with tool results) returns the ordinary text reply.
       const wantsAsk = allUserText.includes("ASK_QUESTION") && !messages.some((m) => m.role === "tool");
       const wantMulti = allUserText.includes("ASK_QUESTION2");
+      // v3.2 push trigger: the first turn after a "PUSH_IT" user message calls
+      // feishu_send to prove the proactive push tool end to end.
+      const wantsPush = allUserText.includes("PUSH_IT") && !messages.some((m) => m.role === "tool");
       const toolCall = wantsAsk ? [{
         id: "call_mock_ask",
         type: "function",
@@ -82,6 +85,13 @@ const server = http.createServer((req, res) => {
               ]
             }]
           })
+        }
+      }] : wantsPush ? [{
+        id: "call_mock_push",
+        type: "function",
+        function: {
+          name: "feishu_send",
+          arguments: JSON.stringify({ text: "🎉 任务完成，主动推送成功！" })
         }
       }] : undefined;
       if (parsed.stream === true) {

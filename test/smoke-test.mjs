@@ -75,6 +75,28 @@ async function pollOutgoing(port, predicate, timeoutMs = 90000) {
   throw new Error("timed out waiting for an outgoing message");
 }
 
+/** Wait for a sealed (green) streaming card whose card JSON contains text. */
+async function pollSealedCard(port, needle, opts = {}) {
+  const { chatId, timeoutMs = 90000 } = opts;
+  return pollOutgoing(port, (e) => {
+    if (e.kind !== "patch" || e.card?.header?.template !== "green") return false;
+    if (!JSON.stringify(e.card).includes(needle)) return false;
+    if (chatId !== undefined && e.chat_id !== chatId) return false;
+    return true;
+  }, timeoutMs);
+}
+
+/** Wait for the live streaming card (kind=card, streaming_mode on). */
+async function pollStreamingCard(port, needle, opts = {}) {
+  const { chatId, timeoutMs = 90000 } = opts;
+  return pollOutgoing(port, (e) => {
+    if (e.kind !== "card" || e.card?.config?.streaming_mode !== true) return false;
+    if (!JSON.stringify(e.card).includes(needle)) return false;
+    if (chatId !== undefined && e.chat_id !== chatId) return false;
+    return true;
+  }, timeoutMs);
+}
+
 function incoming(overrides) {
   return {
     sender: { sender_type: "user", sender_id: { open_id: "ou_test_user" } },
@@ -160,13 +182,16 @@ async function main() {
   try {
     await waitForPort(MOCK_BRIDGE_PORT, 45000);
 
-    // 3. Plain user message → ack + final answer from the mock model.
+    // 3. Plain user message → streaming card + ack + final answer.
     const msg1 = incoming({ message_id: "om_test_1", content: JSON.stringify({ text: "你好，请回复一句话" }) });
     await post(MOCK_BRIDGE_PORT, "/incoming", msg1);
     const ack = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_1" && e.text.includes("⏳"));
     check("ack reply sent", Boolean(ack), ack ? ack.text.slice(0, 30) : "");
-    const final = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_1" && e.text.includes("MOCK-REPLY"));
-    check("final answer from agent", Boolean(final), final ? final.text.slice(0, 60) : "");
+    const streamCard = await pollStreamingCard(MOCK_BRIDGE_PORT, "DSH 处理中", { chatId: "oc_test_chat" });
+    check("streaming card created", Boolean(streamCard) && streamCard.card?.config?.streaming_mode === true, JSON.stringify(streamCard?.card?.header));
+    const sealed = await pollSealedCard(MOCK_BRIDGE_PORT, "MOCK-REPLY", { chatId: "oc_test_chat" });
+    check("final answer in sealed card", Boolean(sealed) && sealed.card?.header?.template === "green", JSON.stringify(sealed?.card?.header));
+    check("sealed card shows streaming-mode off", sealed.card?.config?.streaming_mode !== true, "");
 
     // 4. /help (no model call needed).
     const help = incoming({ message_id: "om_test_2", content: JSON.stringify({ text: "/help" }) });
@@ -202,8 +227,8 @@ async function main() {
       mentions: [{ key: "@_user_1", id: { open_id: "ou_test_bot" }, mentioned_type: "app", name: "DSH 助手" }]
     });
     await post(MOCK_BRIDGE_PORT, "/incoming", groupMention);
-    const groupFinal = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_5" && e.text.includes("MOCK-REPLY"));
-    check("group message with bot mention handled", Boolean(groupFinal));
+    const groupSealed = await pollSealedCard(MOCK_BRIDGE_PORT, "MOCK-REPLY", { chatId: "oc_test_group" });
+    check("group message with bot mention handled", Boolean(groupSealed));
 
     // 8. Second user message continues the SAME session (resume path).
     const status2 = incoming({ message_id: "om_test_6", content: JSON.stringify({ text: "/status" }) });
@@ -223,7 +248,7 @@ async function main() {
     await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_7");
     const afterNew = incoming({ message_id: "om_test_8", content: JSON.stringify({ text: "新会话的第一条消息" }) });
     await post(MOCK_BRIDGE_PORT, "/incoming", afterNew);
-    await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_8" && e.text.includes("MOCK-REPLY"));
+    await pollSealedCard(MOCK_BRIDGE_PORT, "MOCK-REPLY", { chatId: "oc_test_chat" });
     const status3 = incoming({ message_id: "om_test_9", content: JSON.stringify({ text: "/status" }) });
     await post(MOCK_BRIDGE_PORT, "/incoming", status3);
     const statusReply3 = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_9");
@@ -239,8 +264,8 @@ async function main() {
       mockResource: { fileName: "pixel.png", mediaType: "image/png", base64: pngBase64 }
     });
     await post(MOCK_BRIDGE_PORT, "/incoming", imgMsg);
-    const imgReply = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_10" && e.text.includes("MOCK-REPLY"));
-    check("image upload processed with saved path", imgReply.text.includes("收到图片") && imgReply.text.includes(".lark-uploads"), imgReply.text.replace(/\n/g, " ").slice(0, 120));
+    const imgSealed = await pollSealedCard(MOCK_BRIDGE_PORT, "收到图片", { chatId: "oc_test_chat" });
+    check("image upload processed with saved path", Boolean(imgSealed) && JSON.stringify(imgSealed.card).includes(".lark-uploads"), JSON.stringify(imgSealed?.card).replace(/\n/g, " ").slice(0, 120));
     const uploadsDir = join(RUN, ".lark-uploads");
     const uploads = fs.existsSync(uploadsDir) ? fs.readdirSync(uploadsDir) : [];
     check("image bytes saved to uploads dir", uploads.some((f) => f.endsWith(".png")), uploads.join(", "));
@@ -256,8 +281,8 @@ async function main() {
       mockResource: { fileName: "notes.txt", text: "hello lark file" }
     });
     await post(MOCK_BRIDGE_PORT, "/incoming", fileMsg);
-    const fileReply = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_11" && e.text.includes("MOCK-REPLY"));
-    check("file upload processed with saved path", fileReply.text.includes("收到文件") && fileReply.text.includes("notes.txt"), fileReply.text.replace(/\n/g, " ").slice(0, 120));
+    const fileSealed = await pollSealedCard(MOCK_BRIDGE_PORT, "收到文件", { chatId: "oc_test_chat" });
+    check("file upload processed with saved path", Boolean(fileSealed) && JSON.stringify(fileSealed.card).includes("notes.txt"), JSON.stringify(fileSealed?.card).replace(/\n/g, " ").slice(0, 120));
 
     // 13. Post (rich text) message: reduced to plain text and processed.
     const postMsg = incoming({
@@ -266,8 +291,8 @@ async function main() {
       content: JSON.stringify({ title: "标题A", content: [[{ tag: "text", text: "富文本内容B" }]] })
     });
     await post(MOCK_BRIDGE_PORT, "/incoming", postMsg);
-    const postReply = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_12" && e.text.includes("MOCK-REPLY"));
-    check("post message reduced to text", postReply.text.includes("标题A") && postReply.text.includes("富文本内容B"), postReply.text.replace(/\n/g, " ").slice(0, 120));
+    const postSealed = await pollSealedCard(MOCK_BRIDGE_PORT, "标题A", { chatId: "oc_test_chat" });
+    check("post message reduced to text", Boolean(postSealed) && JSON.stringify(postSealed.card).includes("富文本内容B"), JSON.stringify(postSealed?.card).replace(/\n/g, " ").slice(0, 120));
 
     // 14. Answer-parsing unit checks (v3.0).
     const qOpt = { id: "a", question: "选哪个？", options: [{ label: "甲" }, { label: "乙" }] };
@@ -298,8 +323,8 @@ async function main() {
     const click = await post(MOCK_BRIDGE_PORT, "/incoming", { kind: "card_action", chat_id: "oc_test_chat", message_id: card.message_id, value: firstButton.value });
     const patched = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "patch" && e.message_id === card.message_id);
     check("card patched to answered state", Boolean(patched) && JSON.stringify(patched.card).includes("已收到你的选择"), JSON.stringify(patched?.card).slice(0, 100));
-    const afterClick = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_13" && e.text.includes("MOCK-REPLY"));
-    check("turn resumed after card click", Boolean(afterClick), afterClick.text.replace(/\n/g, " ").slice(0, 80));
+    const afterClick = await pollSealedCard(MOCK_BRIDGE_PORT, "MOCK-REPLY", { chatId: "oc_test_chat" });
+    check("turn resumed after card click", Boolean(afterClick), JSON.stringify(afterClick?.card).replace(/\n/g, " ").slice(0, 80));
 
     // 16. Multi-select question falls back to a TEXT prompt (not a card).
     //     Uses a fresh chat so the mock's ask trigger fires (no tool history).
@@ -311,8 +336,17 @@ async function main() {
     await post(MOCK_BRIDGE_PORT, "/incoming", multiAnswer);
     const multiAck = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_16" && e.text.includes("已收到回答"));
     check("multi-select text answer ack", Boolean(multiAck));
-    const afterMulti = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "reply" && e.message_id === "om_test_15" && e.text.includes("MOCK-REPLY"));
+    const afterMulti = await pollSealedCard(MOCK_BRIDGE_PORT, "MOCK-REPLY", { chatId: "oc_test_multi" });
     check("multi-select turn resumed", Boolean(afterMulti));
+
+    // 17. feishu_send proactive push (v3.2): the mock model calls feishu_send
+    //     when the user text contains "PUSH_IT"; the push lands in the chat.
+    const pushMsg = incoming({ message_id: "om_test_17", chat_id: "oc_test_push", content: JSON.stringify({ text: "PUSH_IT 主动推送" }) });
+    await post(MOCK_BRIDGE_PORT, "/incoming", pushMsg);
+    const push = await pollOutgoing(MOCK_BRIDGE_PORT, (e) => e.kind === "create" && e.chat_id === "oc_test_push" && e.text.includes("主动推送成功"));
+    check("feishu_send pushed to chat", Boolean(push), push ? push.text.slice(0, 60) : "");
+    const pushSealed = await pollSealedCard(MOCK_BRIDGE_PORT, "已推送", { chatId: "oc_test_push" });
+    check("feishu_send result in sealed card", Boolean(pushSealed), JSON.stringify(pushSealed?.card).replace(/\n/g, " ").slice(0, 80));
 
     console.log("\n--- bridge log (tail) ---");
     console.log(bridgeLog.split("\n").slice(-25).join("\n"));

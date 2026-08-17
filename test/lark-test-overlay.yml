@@ -28,3 +28,11 @@
     workspace: ./test/run
     uploadsDir: ./test/run/.lark-uploads
     cardMode: true
+    # Keep the explicit "⏳ 收到" ack in the test overlay so both the ack
+    # regression and the streaming card path are exercised.
+    ackEnabled: true
+    streaming:
+      patchIntervalMs: 120
+      maxBodyChars: 900
+      showReasoning: true
+      showToolCalls: true
