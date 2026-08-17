@@ -1,7 +1,7 @@
 {
   "name": "@jmoksz/lark-bridge",
-  "version": "0.5.0",
-  "description": "Feishu (Lark) entry point for DSH: one-command install plugin that lets users drive DSH agents from a Feishu bot over the long-connection event channel, with image/file/video/audio attachments and interactive ask/approval forwarding.",
+  "version": "0.6.0",
+  "description": "Feishu (Lark) entry point for DSH: one-command install plugin that lets users drive DSH agents from a Feishu bot over the long-connection event channel, with image/file/video/audio attachments, interactive ask/approval cards, live streaming progress cards with a tool panel, and proactive feishu_send pushes.",
   "type": "module",
   "main": "lib/index.js",
   "files": [

@@ -1,6 +1,6 @@
 # DSH 飞书入口（Lark Bridge）
 
-让使用者通过**飞书机器人**远程使用 [DSH（DeepSeek Harness）](https://github.com/deepseek-ai/deepseek-harness)：在飞书里给机器人发消息，机器人把消息交给运行在本机的 DSH agent 执行（读写文件、跑命令、搜索网页等），再把最终回答回复到飞书。支持单聊与群聊（群聊需要 @机器人），每个会话（单聊或群）对应一个可跨重启恢复的 DSH session。
+让使用者通过**飞书机器人**远程使用 [DSH（DeepSeek Harness）](https://github.com/deepseek-ai/deepseek-harness)：在飞书里给机器人发消息，机器人把消息交给运行在本机的 DSH agent 执行（读写文件、跑命令、搜索网页等），**全程用流式消息卡片**呈现处理过程（思考、工具调用、回答草稿实时更新），再把最终回答 sealed 进卡片回复到飞书。支持单聊与群聊（群聊需要 @机器人），每个会话（单聊或群）对应一个可跨重启恢复的 DSH session。
 
 > 本质是一个 cordis 插件（`@jmoksz/lark-bridge`）+ 一个 DSH profile（`lark`）。不暴露任何端口，飞书消息通过官方**长连接**（WebSocket）到达，因此无需公网 IP、无需反向代理，在家/内网即可部署。
 
@@ -14,6 +14,8 @@
 - 💬 **交互问答（v3.0）**：agent 需要你选择/确认时（`ask_user_question`、计划评审 `exit_plan_mode`），问题会带编号选项发到飞书，直接回复编号或文字即可，回合自动继续，不再卡死
 - 🔐 **工具审批（v3.0）**：需要审批的操作（如沙箱提权）会把「批准/拒绝」请求发到飞书，回复「1/批准」或「2/拒绝」即可
 - 🎴 **消息卡片（v3.1）**：开启 `cardMode` 后，问题/审批用飞书交互卡片呈现（选项按钮、批准/拒绝按钮），点击即作答；需租户管理员订阅 `card.action.trigger` 事件后按钮生效，未订阅时回复编号/文字兜底
+- 🎞️ **流式回复卡片（v3.2，默认开启）**：`cardMode` 开启时，每条任务发一张「🤖 DSH 处理中…」实时卡片，随 agent 执行流式更新——思考过程、回答草稿、**工具调用面板**（每工具一行状态符号·工具名·参数摘要）实时 PATCH；完成后卡片 sealed 为绿色终态（含最终回复、用时、字数），出错则红色错误态。使用飞书原生 `streaming_mode`，客户端显示实时「生成中」
+- 📨 **主动推送（v3.2）**：新增 `feishu_send` 工具，agent 可在任务进行中主动向当前会话或指定群/单聊推送文本或卡片（如中途汇报、结果分发、主动提醒）
 - 🧵 **多会话**：每个飞书 chat（单聊或群）一个独立 DSH session，互不干扰
 - ♻️ **跨重启恢复**：chat→session 映射持久化在 `$DSH_HOME/lark-bridge-state.json`，桥接重启后自动 `agents.resume()` 恢复上下文
 - 👥 **群聊 @ 过滤**：默认只在被 @ 时才响应群消息（可关闭）
@@ -26,7 +28,8 @@
 ```
 飞书客户端 ──消息──▶ 飞书开放平台 ──长连接(WebSocket)──▶ lark-bridge 插件
    ▲                                                    │  （运行在 dsh --profile lark 进程内）
-   └──────────────回复（im.message.reply）◀──────────────┘
+   │                                                    │  每条任务：流式卡片 create → PATCH 实时更新 → sealed
+   └───────────卡片/文本回复（im.message.reply / interactive）◀─┘
                                                           │ 每个 chat_id 一个 DSH session
                                                           ▼
                                                      DSH agent（模型、工具、文件系统）
@@ -36,11 +39,15 @@
 
 | 路径 | 说明 |
 |---|---|
-| `lib/index.js` | 插件本体（cordis bundle：桥接 + 附件处理） |
+| `lib/index.js` | 插件本体（cordis bundle：桥接 + 附件处理 + 流式卡片集成） |
+| `lib/cards.js` | 纯函数卡片构建（问题/审批/流式/sealed 卡片） |
+| `lib/answers.js` | 纯函数：问题/审批文本格式化与回复解析 |
+| `lib/streaming.js` | v3.2 TurnReporter：流式卡片生命周期（事件驱动、节流 PATCH、退避/熔断） |
+| `lib/push.js` | v3.2 `feishu_send` 主动推送工具定义 |
 | `cordis.patch.yml` | 插件自带的 bundle 补丁（persona + 桥配置，装完即用，无需单独补丁文件） |
 | `package.json` | 插件清单（`dsh.bundle` 声明 → 安装后自动成为 profile 层） |
 | `scripts/setup-lark-profile.sh` | 本地开发用：创建/刷新 `$DSH_HOME/profiles/lark` |
-| `test/` | 离线端到端冒烟测试（mock 模型 + mock 飞书传输，无需真实应用/模型） |
+| `test/` | 单测（`streaming-test.mjs`）+ 离线端到端冒烟（`smoke-test.mjs`，mock 模型 + mock 飞书传输） |
 | `README.md` | 本文件 |
 
 ## 前置条件
@@ -112,7 +119,7 @@ dsh plugin --profile lark add github:JMOKSZ/dsh-lark-bridge --ignore-scripts
 |---|---|---|
 | `replyToMentionOnly` | `true` | 群聊仅响应 @ 机器人的消息；`false` 则响应群里所有消息 |
 | `maxReplyChars` | `20000` | 回复截断上限（字符） |
-| `ackEnabled` | `true` | 是否先回「⏳ 收到」确认 |
+| `ackEnabled` | `false` | 是否先回「⏳ 收到」确认（v3.2 起默认关闭：流式卡片本身就是即时反馈；纯文本模式或旧行为可重新开启） |
 | `includeErrorDetails` | `true` | 出错时是否把错误码/信息带回飞书 |
 | `workspace` | 启动目录 | agent 工作目录（等价于 `LARK_WORKSPACE`） |
 | `transport` | `"lark"` | `"lark"` 或 `"mock"`（离线测试） |
@@ -122,7 +129,15 @@ dsh plugin --profile lark add github:JMOKSZ/dsh-lark-bridge --ignore-scripts
 | `interactionEnabled` | `true` | 是否把 agent 的提问/审批转发到飞书（v3.0） |
 | `interactionTimeoutMs` | `600000`（10分钟） | 等待用户回复的超时；超时后取消该交互并提示 |
 | `agentPreset` | `"standard"` | agent 加入的预设（`standard` 提供 `ask_user_question` 与完整工具集）；`""` 表示不加入 |
-| `cardMode` | `false` | v3.1 卡片：`true` 时用飞书消息卡片（按钮）呈现问题/审批。**按钮点击需要租户管理员在开放平台订阅一次 `card.action.trigger` 事件（长连接）**；未订阅时按钮不可用，直接回复编号/文字仍可作答（卡片降级为静态展示，发送失败自动回退纯文本） |
+| `cardMode` | `true` | v3.1+v3.2 卡片总开关：问题/审批按钮卡片 **+ 流式回复卡片**（思考/工具面板/回答草稿实时更新，完成后 sealed）。**问题/审批按钮点击需要租户管理员在开放平台订阅一次 `card.action.trigger` 事件（长连接）**；未订阅时按钮不可用，直接回复编号/文字仍可作答；卡片任一步失败自动回退纯文本 |
+| `streaming.patchIntervalMs` | `700` | 流式卡片 PATCH 节流间隔（毫秒；飞书对卡片更新有频控） |
+| `streaming.maxBodyChars` | `900` | 卡片正文单段截断上限（字符；卡片体积受限） |
+| `streaming.showReasoning` | `true` | 是否在卡片上展示思考过程 |
+| `streaming.showToolCalls` | `true` | 是否展示工具调用面板（每工具一行状态符号·工具名·参数摘要） |
+| `streaming.cardTitleStreaming` | `"🤖 DSH 处理中…"` | 流式进行中的卡片标题 |
+| `streaming.cardTitleDone` | `"🤖 DSH 处理完成"` | sealed 终态卡片标题 |
+| `push.enabled` | `true` | 是否注册 `feishu_send` 工具（agent 主动推送） |
+| `push.defaultChatId` | `""` | `feishu_send` 缺省推送目标 chat_id（空 = 当前会话） |
 
 ### 模型配置
 
@@ -194,16 +209,18 @@ launchctl unload ~/Library/LaunchAgents/com.jmoksz.dsh-lark-bridge.plist # 停�
 
 - **单聊**：直接发文字消息。
 - **群聊**：@机器人 后发消息（默认只响应被 @ 的消息）。
-- 每条消息先收到「⏳ 收到，DSH 正在处理…」，处理完成后收到最终回答（回复在原消息下方）。
+- **流式回复卡片（v3.2 默认）**：每条任务发一张「🤖 DSH 处理中…」实时卡片，随处理过程实时更新——思考、工具调用面板（🛠️ 状态符号·工具名·参数摘要）、回答草稿逐段出现；完成后卡片变为绿色终态（最终回复 + 用时 + 字数），出错为红色错误态。期间你看到的就是卡片在“干活”，无需等待沉默。
+- **主动推送**：任务进行中 agent 可用 `feishu_send` 主动向会话推送消息/卡片（如中途汇报、结果分发）。
 - **上传文件**：直接发送图片 / 文件 / 视频 / 音频即可。桥接会下载资源并处理：
   - 图片 → 保存到上传目录，视觉模型下直接附加给模型“看图”（也可配合文字说明）；
   - 文件 / 视频 / 音频 → 保存到上传目录，agent 用工具读取、分析或转码；
   - 可同时发一条文字说明，例如：`这张图里有什么？`、`帮我整理这个 Excel 的月度汇总`、`这个视频有多长、分辨率多少？`。
-- **交互问答（v3.0）**：当 agent 需要你选择/确认/审批时，机器人会发来带编号选项的问题（或「批准/拒绝」请求）：
-  - 选择题：回复编号（如 `1`）或选项文字，或直接输入自定义内容；
+- **交互问答（v3.0）**：当 agent 需要你选择/确认/审批时，机器人会发来带编号选项的按钮卡片（或「批准/拒绝」卡片）：
+  - 直接**点击卡片按钮**即作答（需已订阅 `card.action.trigger`）；
+  - 或回复编号（如 `1`）/选项文字/自定义内容；
   - 多选：回复多个编号（逗号分隔）；
   - 多题一批：按 `1. 回答`、`2. 回答` 逐行回复；
-  - 审批：回复 `1`/`批准`/`允许` 或 `2`/`拒绝`。
+  - 审批：点「✅ 批准 / 🚫 拒绝」或回复 `1`/`批准`/`允许`、`2`/`拒绝`。
   - 回复后 agent 会继续执行，无需重新发起任务；等待期间命令（`/status` 等）仍可用。
 - 命令：
   - `/new` — 开启新会话（清空本会话上下文）
@@ -213,15 +230,16 @@ launchctl unload ~/Library/LaunchAgents/com.jmoksz.dsh-lark-bridge.plist # 停�
 
 示例：`帮我看看当前目录下有哪些文件`、`运行测试并把结果告诉我`、`把这段需求写成一个 TODO 清单`、`这张截图里写了什么`、`分析这份财务报表并给我摘要`。
 
-## 测试（离线冒烟）
+## 测试（离线）
 
 不需要飞书应用、不需要真实模型：
 
 ```bash
-node test/smoke-test.mjs
+node test/streaming-test.mjs   # 单元测试：卡片构建 / TurnReporter / feishu_send
+node test/smoke-test.mjs       # 端到端冒烟（mock 模型 + mock 飞书传输）
 ```
 
-覆盖：profile 启动、消息→agent→回复（mock 模型）、群聊 @ 过滤、会话跨消息恢复、`/new` 重开会话、状态持久化、图片上传（落盘 + 附件块）、文件上传、富文本提取、交互问答全链路（问题转发 → 回答 → 回合继续）、答案解析与审批关键词。预期输出 `25/25 checks passed`。
+覆盖：profile 启动、消息→agent→回复（mock 模型）、群聊 @ 过滤、会话跨消息恢复、`/new` 重开会话、状态持久化、图片上传（落盘 + 附件块）、文件上传、富文本提取、交互问答全链路（问题转发 → 回答 → 回合继续）、答案解析与审批关键词、**流式卡片生命周期（create → PATCH → sealed）**、**工具面板渲染**、**`feishu_send` 主动推送端到端**。预期输出：单测 `39/39`、冒烟 `33/33 checks passed`。
 
 ## 更新插件
 
@@ -249,18 +267,22 @@ cd dsh-lark-bridge && git pull
 | 图片没附加给模型（日志提示 no image input） | 当前模型为纯文本模型；配置视觉模型（声明 `image` 输入）后自动升级 |
 | 回复报 `MISSING_CREDENTIAL` | 模型 key 未配置：`DEEPSEEK_API_KEY` 或 `$DSH_HOME/.credentials.yaml` |
 | 机器人回复「💥 任务出错」 | 看桥接进程日志中的错误码；`includeErrorDetails: true` 时错误码会直接带回飞书 |
+| 卡片只显示初始「处理中」不更新 | 确认 `im:message:update` 权限已添加并重新发布；PATCH 频控可调 `streaming.patchIntervalMs` |
+| 卡片始终显示「🤖 DSH 处理中…」不 sealed | 看日志 `card patch failed` / `breaker tripped`；多为权限或频控问题，已自动降级文本回复 |
 | 进程没日志 | 日志走 stdout/stderr，用 nohup/launchd 重定向到文件查看 |
 
-## 已知限制（v0.5）
+## 已知限制（v0.6）
 
 - 表情包（sticker）与合并转发/卡片消息暂不支持（飞书资源接口本身限制）。
 - 附件上限 100MB（飞书接口限制），可经 `maxUploadBytes` 调低。
 - 图片附加给模型依赖模型声明 `image` 输入模态；纯文本模型下图片落盘 + `read_image` 工具兜底。
 - **卡片按钮**（`cardMode: true`）需要租户管理员在开放平台订阅一次 `card.action.trigger` 事件（长连接）；未订阅时按钮点击无效，但直接回复编号/文字仍可作答。
-- 处理期间只发「确认 + 最终回答」，不逐条推送工具过程。
+- 流式卡片是**增强**：任一步（创建/PATCH）失败自动回退纯文本回复，不影响任务执行；连续 PATCH 失败会熔断降级。
+- 卡片正文受 `streaming.maxBodyChars` 截断（思考/草稿只保留尾部摘要）；工具面板参数摘要同样截断。
+- `feishu_send` 推送失败不会中断回合——工具返回错误结果，由 agent 决定是否重试或改用当前会话。
 - 群聊共享一个会话上下文（同群所有人共用），不同群/单聊彼此隔离。
 - 交互等待期间，该 chat 的下一条文本消息会被当作回答（可用 `/` 命令打断）。
-- 回复超过 `maxReplyChars`（默认 20000 字符）会被截断。
+- 回复超过 `maxReplyChars`（默认 20000 字符）会被截断（sealed 卡片内同样适用）。
 
 ## License
 
