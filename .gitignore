@@ -20,6 +20,7 @@ lark_data/
 *.pem
 .credentials.yaml
 lark-bridge-state.json
+.github-tokens.txt
 
 # macOS
 .DS_Store
