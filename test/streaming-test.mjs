@@ -1,14 +1,16 @@
 // streaming-test.mjs — unit tests for the v3.2 streaming-card layer.
 //
-// Tests the pure card builders in lib/cards.js (streamingCard / toolPanel)
-// and the TurnReporter lifecycle in lib/streaming.js with a fake transport,
-// including event→state transitions, throttled PATCH scheduling, the failure
-// backoff/breaker, and the sealed/error terminal states.
+// Tests the pure card builders in lib/cards.js (streamingCard / toolPanel),
+// the TurnReporter lifecycle in lib/streaming.js with a fake transport
+// (event→state transitions, throttled PATCH scheduling, failure backoff/
+// breaker, sealed/error terminal states), and the feishu_send push tool in
+// lib/push.js.
 //
 // Usage:  node test/streaming-test.mjs
 
 import { streamingCard, toolPanelLines, sealedStreamingCard } from "../lib/cards.js";
 import { TurnReporter } from "../lib/streaming.js";
+import { createPushTool } from "../lib/push.js";
 
 const results = [];
 function check(label, ok, detail = "") {
@@ -288,6 +290,78 @@ function makeReporter(transport, overrides = {}) {
   await sleep(120);
   const patches = transport.cards.filter((c) => c.kind === "patch");
   check("no patches after dispose", patches.length === 0, `patches=${patches.length}`);
+}
+
+// ---------------------------------------------------------------------------
+// feishu_send push tool (Task 3)
+// ---------------------------------------------------------------------------
+
+function makePushDeps(overrides = {}) {
+  const calls = [];
+  const deps = {
+    sendText: async (chatId, text) => {
+      calls.push({ kind: "text", chatId, text });
+      return `msg_text_${calls.length}`;
+    },
+    sendCard: async (chatId, card) => {
+      calls.push({ kind: "card", chatId, card });
+      return `msg_card_${calls.length}`;
+    },
+    chatForAgent: () => "oc_default",
+    logger: { info() {}, warn() {}, error() {} },
+    ...overrides
+  };
+  return { deps, calls };
+}
+
+{
+  // feishu_send text to the default chat.
+  const { deps, calls } = makePushDeps();
+  const tool = createPushTool(deps);
+  const result = await tool.execute({ text: "任务已完成" }, { agent: {} });
+  check("push text returns ok", result.ok === true, JSON.stringify(result));
+  check("push text to default chat", calls.length === 1 && calls[0].kind === "text" && calls[0].chatId === "oc_default", JSON.stringify(calls[0]));
+  check("push text content", calls[0]?.text === "任务已完成", calls[0]?.text);
+}
+
+{
+  // feishu_send card to an explicit chat.
+  const { deps, calls } = makePushDeps();
+  const tool = createPushTool(deps);
+  const card = { config: {}, header: { title: { tag: "plain_text", content: "通知" } }, elements: [] };
+  const result = await tool.execute({ chatId: "oc_other", card }, { agent: {} });
+  check("push card returns ok", result.ok === true, JSON.stringify(result));
+  check("push card to explicit chat", calls.length === 1 && calls[0].kind === "card" && calls[0].chatId === "oc_other", JSON.stringify(calls[0]));
+  check("push card payload passed through", calls[0]?.card === card, "");
+}
+
+{
+  // feishu_send without chatId and no resolvable chat → error.
+  const { deps } = makePushDeps({ chatForAgent: () => undefined });
+  const tool = createPushTool(deps);
+  const result = await tool.execute({ text: "hi" }, { agent: {} });
+  check("push without target fails", result.ok === false && /目标会话/.test(result.error ?? ""), JSON.stringify(result));
+}
+
+{
+  // feishu_send with both text and card → error (mutually exclusive).
+  const { deps, calls } = makePushDeps();
+  const tool = createPushTool(deps);
+  const result = await tool.execute({ text: "hi", card: { elements: [] } }, { agent: {} });
+  check("push text+card rejected", result.ok === false && /之一/.test(result.error ?? ""), JSON.stringify(result));
+  check("push rejected sends nothing", calls.length === 0, `calls=${calls.length}`);
+}
+
+{
+  // feishu_send transport failure → error result, no throw.
+  const { deps } = makePushDeps({
+    sendText: async () => {
+      throw new Error("rate limited");
+    }
+  });
+  const tool = createPushTool(deps);
+  const result = await tool.execute({ text: "hi" }, { agent: {} });
+  check("push transport failure returns error", result.ok === false && /rate limited/.test(result.error ?? ""), JSON.stringify(result));
 }
 
 // ---------------------------------------------------------------------------
