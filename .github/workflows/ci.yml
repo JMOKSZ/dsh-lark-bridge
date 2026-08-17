@@ -18,10 +18,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
+
+      - name: Install DSH CLI (for smoke test)
+        run: npm install -g @deepseek-ai/dsh
 
       - name: Unit tests (streaming)
         run: node test/streaming-test.mjs
