@@ -23,7 +23,7 @@ jobs:
         run: pnpm install --no-frozen-lockfile
 
       - name: Install DSH CLI (for smoke test)
-        run: npm install -g @deepseek-ai/dsh
+        run: npm install -g @deepseek-ai/dsh@0.1.7-rc.2
 
       - name: Unit tests (streaming)
         run: node test/streaming-test.mjs
